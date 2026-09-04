@@ -18,7 +18,10 @@ LINK   = wlink
 
 # -bt=dos targets plain real-mode DOS. -ms = small memory model (fine for
 # this program: one code segment, one data segment, well under 64K each).
-CFLAGS  = -bt=dos -ms -0 -w4 -zq
+# -eoo forces classic OMF object output -- some host builds of wcc/wpp
+# (e.g. the Linux cross-host binaries) default to ELF .o objects otherwise,
+# which wlink (a DOS/OMF linker) can't use.
+CFLAGS  = -bt=dos -ms -0 -w4 -zq -eoo
 CXXFLAGS = $(CFLAGS)
 
 !ifdef SERIALONLY
@@ -41,10 +44,10 @@ $(TARGET): $(OBJS)
 !endif
 
 .c.obj:
-	$(CC) $(CFLAGS) $< -fo=$@
+	$(CC) $(CFLAGS) $^& -fo=$^&.obj
 
 .cpp.obj:
-	$(CXX) $(CXXFLAGS) $< -fo=$@
+	$(CXX) $(CXXFLAGS) $^& -fo=$^&.obj
 
 clean: .SYMBOLIC
 	del *.obj

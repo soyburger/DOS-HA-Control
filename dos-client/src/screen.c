@@ -1,7 +1,13 @@
 /* DOS Shell-look text UI: white-on-blue chrome, single-line box drawing
- * (CP437), a highlighted list, and a status line. Built entirely on
- * conio.h so it needs no external TUI library.
+ * (CP437), a highlighted list, and a status line.
+ *
+ * Writes directly to text-mode video memory at B800:0000 rather than using
+ * Borland's textcolor()/gotoxy()/clrscr() -- OpenWatcom's conio.h doesn't
+ * provide those (they're a Borland/Turbo C extension); direct video writes
+ * plus BIOS INT 10h for the cursor are standard, compiler-independent DOS
+ * technique and were verified to compile clean under OpenWatcom.
  */
+#include <dos.h>
 #include <conio.h>
 #include <string.h>
 #include <stdio.h>
@@ -22,8 +28,26 @@
 #define CH_BR 188
 #define CH_H  205
 #define CH_V  186
-#define CH_TEE_L 204
-#define CH_TEE_R 185
+
+/* Standard 4-bit CGA/EGA/VGA text attribute palette (index, not RGB). */
+#define BLACK        0
+#define BLUE         1
+#define GREEN        2
+#define CYAN         3
+#define RED          4
+#define MAGENTA      5
+#define BROWN        6
+#define LIGHTGRAY    7
+#define DARKGRAY     8
+#define LIGHTBLUE    9
+#define LIGHTGREEN   10
+#define LIGHTCYAN    11
+#define LIGHTRED     12
+#define LIGHTMAGENTA 13
+#define YELLOW       14
+#define WHITE        15
+
+#define ATTR(fg, bg) (unsigned char) (((bg) << 4) | (fg))
 
 #define COL_BG     BLUE
 #define COL_FG     WHITE
@@ -32,162 +56,168 @@
 #define COL_SEL_FG BLACK
 #define COL_ON     LIGHTGREEN
 #define COL_OFF    LIGHTRED
-#define COL_STATUS LIGHTGRAY
 
-static void put_at(int x, int y, int fg, int bg, const char *s)
+static unsigned char far *video = (unsigned char far *) 0xB8000000L;
+
+static void vputc(int row, int col, int ch, unsigned char attr)
 {
-    textcolor(fg);
-    textbackground(bg);
-    gotoxy(x, y);
-    cputs(s);
+    long off = ((long) row * SCR_COLS + col) * 2;
+    video[off]     = (unsigned char) ch;
+    video[off + 1] = attr;
 }
 
-static void hline(int x1, int x2, int y, int fg, int bg)
+static void vputs(int row, int col, const char *s, unsigned char attr)
 {
-    int x;
-    textcolor(fg);
-    textbackground(bg);
-    for (x = x1; x <= x2; x++) {
-        gotoxy(x, y);
-        putch(CH_H);
+    while (*s)
+        vputc(row, col++, (unsigned char) *s++, attr);
+}
+
+static void vfill(int row, int col, int len, int ch, unsigned char attr)
+{
+    int i;
+    for (i = 0; i < len; i++)
+        vputc(row, col + i, ch, attr);
+}
+
+static void vfill_row(int row, unsigned char attr)
+{
+    vfill(row, 0, SCR_COLS, ' ', attr);
+}
+
+static void set_cursor_visible(int visible)
+{
+    union REGS r;
+    r.h.ah = 0x01;
+    if (visible) {
+        r.h.ch = 0x0D;
+        r.h.cl = 0x0E;
+    } else {
+        r.h.ch = 0x20;
+        r.h.cl = 0x00;
     }
+    int86(0x10, &r, &r);
+}
+
+static void set_cursor_pos(int row, int col)
+{
+    union REGS r;
+    r.h.ah = 0x02;
+    r.h.bh = 0;
+    r.h.dh = (unsigned char) row;
+    r.h.dl = (unsigned char) col;
+    int86(0x10, &r, &r);
 }
 
 static void box(int x1, int y1, int x2, int y2, const char *title)
 {
-    int y;
+    int x, y;
 
-    textcolor(COL_FG);
-    textbackground(COL_BG);
-
-    gotoxy(x1, y1); putch(CH_TL);
-    hline(x1 + 1, x2 - 1, y1, COL_FG, COL_BG);
-    gotoxy(x2, y1); putch(CH_TR);
+    vputc(y1, x1, CH_TL, ATTR(COL_FG, COL_BG));
+    for (x = x1 + 1; x < x2; x++)
+        vputc(y1, x, CH_H, ATTR(COL_FG, COL_BG));
+    vputc(y1, x2, CH_TR, ATTR(COL_FG, COL_BG));
 
     for (y = y1 + 1; y < y2; y++) {
-        gotoxy(x1, y); putch(CH_V);
-        gotoxy(x2, y); putch(CH_V);
+        vputc(y, x1, CH_V, ATTR(COL_FG, COL_BG));
+        vputc(y, x2, CH_V, ATTR(COL_FG, COL_BG));
     }
 
-    gotoxy(x1, y2); putch(CH_BL);
-    hline(x1 + 1, x2 - 1, y2, COL_FG, COL_BG);
-    gotoxy(x2, y2); putch(CH_BR);
+    vputc(y2, x1, CH_BL, ATTR(COL_FG, COL_BG));
+    for (x = x1 + 1; x < x2; x++)
+        vputc(y2, x, CH_H, ATTR(COL_FG, COL_BG));
+    vputc(y2, x2, CH_BR, ATTR(COL_FG, COL_BG));
 
     if (title && *title) {
         char buf[SCR_COLS];
         sprintf(buf, " %s ", title);
-        textcolor(COL_TITLE);
-        gotoxy(x1 + 2, y1);
-        cputs(buf);
+        vputs(y1, x1 + 2, buf, ATTR(COL_TITLE, COL_BG));
     }
 }
 
 void scr_init(void)
 {
-    _setcursortype(_NOCURSOR);
-    textbackground(COL_BG);
-    textcolor(COL_FG);
-    clrscr();
+    int r;
+
+    set_cursor_visible(0);
+    for (r = 0; r < SCR_ROWS; r++)
+        vfill_row(r, ATTR(COL_FG, COL_BG));
 }
 
 void scr_shutdown(void)
 {
-    textbackground(BLACK);
-    textcolor(LIGHTGRAY);
-    clrscr();
-    _setcursortype(_NORMALCURSOR);
-    gotoxy(1, 1);
+    int r;
+    for (r = 0; r < SCR_ROWS; r++)
+        vfill_row(r, ATTR(LIGHTGRAY, BLACK));
+    set_cursor_pos(0, 0);
+    set_cursor_visible(1);
 }
 
 void scr_draw_chrome(const char *title, const char *status_left,
                       const char *status_right)
 {
-    char line[SCR_COLS + 1];
+    int r;
     int pad;
 
-    textbackground(COL_BG);
-    textcolor(COL_FG);
-    clrscr();
+    for (r = 0; r < SCR_ROWS; r++)
+        vfill_row(r, ATTR(COL_FG, COL_BG));
 
     /* Title bar */
-    textbackground(CYAN);
-    textcolor(BLACK);
-    gotoxy(1, 1);
-    memset(line, ' ', SCR_COLS);
-    line[SCR_COLS] = '\0';
-    cputs(line);
+    vfill_row(0, ATTR(BLACK, CYAN));
     pad = (SCR_COLS - (int) strlen(title)) / 2;
     if (pad < 0) pad = 0;
-    gotoxy(pad + 1, 1);
-    cputs(title);
+    vputs(0, pad, title, ATTR(BLACK, CYAN));
 
     box(LIST_LEFT - 1, LIST_TOP - 1, LIST_RIGHT + 1, LIST_BOTTOM + 1,
         "Home Assistant Devices");
 
     /* Status bar */
-    textbackground(CYAN);
-    textcolor(BLACK);
-    gotoxy(1, SCR_ROWS);
-    memset(line, ' ', SCR_COLS);
-    line[SCR_COLS] = '\0';
-    cputs(line);
-    gotoxy(2, SCR_ROWS);
-    cputs(status_left);
+    vfill_row(SCR_ROWS - 1, ATTR(BLACK, CYAN));
+    vputs(SCR_ROWS - 1, 1, status_left, ATTR(BLACK, CYAN));
     if (status_right) {
-        gotoxy(SCR_COLS - (int) strlen(status_right) - 1, SCR_ROWS);
-        cputs(status_right);
+        int x = SCR_COLS - (int) strlen(status_right) - 2;
+        vputs(SCR_ROWS - 1, x, status_right, ATTR(BLACK, CYAN));
     }
 }
 
 void scr_draw_list(const Entity *entities, int count, int selected)
 {
     int row, i;
-    int visible = LIST_BOTTOM - LIST_TOP; /* rows available */
+    int visible = LIST_BOTTOM - LIST_TOP;
 
     for (row = 0; row < visible; row++) {
         i = row; /* no scrolling yet -- fine for a handful of entities */
-        gotoxy(LIST_LEFT, LIST_TOP + row);
 
         if (i >= count) {
-            textbackground(COL_BG);
-            textcolor(COL_BG);
-            cputs("                                                              ");
+            vfill(LIST_TOP + row, LIST_LEFT, LIST_RIGHT - LIST_LEFT, ' ',
+                  ATTR(COL_BG, COL_BG));
             continue;
         }
 
         {
-            int fg = (i == selected) ? COL_SEL_FG : COL_FG;
-            int bg = (i == selected) ? COL_SEL_BG : COL_BG;
+            unsigned char fg = (i == selected) ? COL_SEL_FG : COL_FG;
+            unsigned char bg = (i == selected) ? COL_SEL_BG : COL_BG;
+            unsigned char rowattr = ATTR(fg, bg);
+            unsigned char stateattr;
             char namebuf[40];
-            int statecol = (strcmp(entities[i].state, "on") == 0) ? COL_ON : COL_OFF;
+            char stbuf[20];
 
-            textbackground(bg);
-            textcolor(fg);
+            stateattr = (i == selected) ? rowattr
+                        : ATTR(strcmp(entities[i].state, "on") == 0
+                                   ? COL_ON : COL_OFF, COL_BG);
+
             sprintf(namebuf, " %-38s", entities[i].friendly_name);
-            cputs(namebuf);
+            vputs(LIST_TOP + row, LIST_LEFT, namebuf, rowattr);
 
-            textcolor((i == selected) ? fg : statecol);
-            {
-                char stbuf[20];
-                sprintf(stbuf, "%-20s", entities[i].state);
-                cputs(stbuf);
-            }
+            sprintf(stbuf, "%-20s", entities[i].state);
+            vputs(LIST_TOP + row, LIST_LEFT + 39, stbuf, stateattr);
         }
     }
 }
 
 void scr_status_msg(const char *msg)
 {
-    char line[SCR_COLS + 1];
-
-    textbackground(CYAN);
-    textcolor(BLACK);
-    gotoxy(2, SCR_ROWS);
-    memset(line, ' ', 60);
-    line[60] = '\0';
-    cputs(line);
-    gotoxy(2, SCR_ROWS);
-    cputs(msg);
+    vfill(SCR_ROWS - 1, 1, 60, ' ', ATTR(BLACK, CYAN));
+    vputs(SCR_ROWS - 1, 1, msg, ATTR(BLACK, CYAN));
 }
 
 void scr_alert(const char *title, const char *msg)
@@ -195,12 +225,8 @@ void scr_alert(const char *title, const char *msg)
     int x1 = 15, y1 = 10, x2 = 65, y2 = 14;
 
     box(x1, y1, x2, y2, title);
-    textbackground(COL_BG);
-    textcolor(LIGHTRED);
-    gotoxy(x1 + 2, y1 + 2);
-    cputs(msg);
-    textcolor(WHITE);
-    gotoxy(x1 + 2, y2 - 1);
-    cputs("Press any key...");
+    vfill(y1 + 2, x1 + 2, x2 - x1 - 4, ' ', ATTR(LIGHTRED, COL_BG));
+    vputs(y1 + 2, x1 + 2, msg, ATTR(LIGHTRED, COL_BG));
+    vputs(y2 - 1, x1 + 2, "Press any key...", ATTR(WHITE, COL_BG));
     getch();
 }

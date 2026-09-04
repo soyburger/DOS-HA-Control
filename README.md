@@ -46,7 +46,15 @@ The wire protocol between DOS and the bridge is documented in
 |--------------------------------|--------------------------------------------|
 | Wire protocol                  | Designed, documented                        |
 | Bridge (`ha_bridge.py`)        | Working, tested against a mock HA server    |
-| DOS TUI (`screen.c`)           | Written, not yet compiled                   |
-| Serial transport (`net_serial.c`) | Written, not yet compiled/tested on hardware |
-| mTCP transport (`net_tcp.cpp`) | Written from memory of mTCP samples — needs a verification pass against the real SDK headers before it will build |
-| DOS client wiring (`main.c`, `config.c`) | Written, not yet compiled |
+| DOS TUI (`screen.c`)           | Compiles clean; rewritten to use direct video-memory writes + BIOS INT 10h after discovering OpenWatcom's `conio.h` lacks Borland's textcolor/gotoxy/clrscr |
+| Serial transport (`net_serial.c`) | Compiles clean; ran under DOSBox with no CPU exceptions, not yet tested against real hardware |
+| mTCP transport (`net_tcp.cpp`) | Written from memory of mTCP samples — not yet build-tested, needs the real mTCP SDK headers |
+| DOS client wiring (`main.c`, `config.c`) | Compiles clean, linked into a working `HACLIENT.EXE`, ran under DOSBox |
+
+The `SERIALONLY=1` build was compiled end-to-end with OpenWatcom (via a
+colima/Docker amd64-emulation loop, since no native macOS OpenWatcom
+build exists) and smoke-tested under DOSBox — see
+[dos-client/docs/BUILD.md](dos-client/docs/BUILD.md) for the exact steps
+and the three real bugs that loop caught. The TUI layout itself hasn't
+been eyeballed on screen yet (no screenshot access to the native DOSBox
+window in that environment).
