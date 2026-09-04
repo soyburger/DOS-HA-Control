@@ -2,14 +2,16 @@
 
 The DOS client never talks to Home Assistant directly (no TLS on real-mode
 DOS). Instead it speaks a tiny plain-text, line-oriented protocol to the
-bridge service, which does the real HA REST calls. The same protocol runs
-identically over:
+bridge service, which does the real HA REST calls, over a serial (RS-232)
+link, default 9600 8N1.
 
-- **TCP** (mTCP on the 3Com EtherLink III, port 6321 by default)
-- **Serial** (RS-232, default 9600 8N1, or configurable)
-
-This lets the DOS client use one code path (`protocol.c`) regardless of
-transport — only `net_tcp.c` / `net_serial.c` differ underneath.
+The bridge (`bridge/ha_bridge.py`) can also serve this same protocol over
+plain TCP for other tooling/testing — see `bridge/config.example.ini`'s
+`[tcp]` section — but the DOS client (`dos-client/`) only ever uses serial;
+an earlier mTCP/EtherLink-III transport was dropped as not worth the
+complexity. `protocol.c` on the DOS side is written against a small
+`Transport` interface (`net_serial.c` implements it), so adding a
+transport back later wouldn't touch the protocol logic.
 
 ## Framing
 

@@ -30,9 +30,6 @@ int config_load(const char *path, Config *cfg)
     char line[128];
 
     /* Defaults */
-    cfg->transport = TRANSPORT_TCP;
-    strcpy(cfg->host, "192.168.1.50");
-    cfg->port = 6321;
     cfg->com_port = SERIAL_COM1;
     cfg->baud_code = SERIAL_BAUD_9600;
     cfg->timeout_ticks = 90; /* ~5 sec */
@@ -55,15 +52,7 @@ int config_load(const char *path, Config *cfg)
         key = line;
         val = eq + 1;
 
-        if (stricmp(key, "TRANSPORT") == 0) {
-            cfg->transport = (stricmp(val, "SERIAL") == 0)
-                                  ? TRANSPORT_SERIAL : TRANSPORT_TCP;
-        } else if (stricmp(key, "HOST") == 0) {
-            strncpy(cfg->host, val, sizeof(cfg->host) - 1);
-            cfg->host[sizeof(cfg->host) - 1] = '\0';
-        } else if (stricmp(key, "PORT") == 0) {
-            cfg->port = (unsigned short) atoi(val);
-        } else if (stricmp(key, "COM") == 0) {
+        if (stricmp(key, "COM") == 0) {
             cfg->com_port = atoi(val) - 1; /* file uses 1-based COM1..4 */
             if (cfg->com_port < 0) cfg->com_port = 0;
         } else if (stricmp(key, "BAUD") == 0) {

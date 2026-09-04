@@ -1,6 +1,6 @@
 /* HACLIENT -- DOS Shell-style Home Assistant control panel for DOS 6.22 /
- * 486 machines. Talks to bridge/ha_bridge.py over mTCP (3Com EtherLink III)
- * or a serial cable; see docs/PROTOCOL.md and dos-client/docs/BUILD.md.
+ * 486 machines. Talks to bridge/ha_bridge.py over a serial cable;
+ * see docs/PROTOCOL.md and dos-client/docs/BUILD.md.
  */
 #include <conio.h>
 #include <stdio.h>
@@ -11,7 +11,6 @@
 #include "protocol.h"
 #include "screen.h"
 #include "net_serial.h"
-#include "net_tcp.h"
 
 #define KEY_UP    72
 #define KEY_DOWN  80
@@ -23,30 +22,12 @@ static int entity_count = 0;
 static int selected = 0;
 static Transport transport;
 static Config cfg;
-static int using_tcp = 0;
 
 static int connect_transport(void)
 {
-    if (cfg.transport == TRANSPORT_TCP) {
-        using_tcp = 1;
-        scr_status_msg("Bringing up mTCP...");
-        if (mtcp_stack_init() != 0) {
-            scr_alert("Network Error",
-                      "Could not initialize mTCP. Check packet driver / MTCPCFG.CFG.");
-            return -1;
-        }
-        scr_status_msg("Connecting to bridge (TCP)...");
-        if (tcp_open(cfg.host, cfg.port, cfg.timeout_ticks) != 0) {
-            scr_alert("Network Error", "Could not connect to bridge over TCP.");
-            return -1;
-        }
-        tcp_get_transport(&transport);
-    } else {
-        using_tcp = 0;
-        scr_status_msg("Opening COM port...");
-        serial_open(cfg.com_port, cfg.baud_code, cfg.timeout_ticks);
-        serial_get_transport(&transport);
-    }
+    scr_status_msg("Opening COM port...");
+    serial_open(cfg.com_port, cfg.baud_code, cfg.timeout_ticks);
+    serial_get_transport(&transport);
 
     scr_status_msg("Pinging bridge...");
     if (!proto_ping(&transport)) {
@@ -57,14 +38,6 @@ static int connect_transport(void)
     }
 
     return 0;
-}
-
-static void disconnect_transport(void)
-{
-    if (using_tcp) {
-        tcp_close();
-        mtcp_stack_shutdown();
-    }
 }
 
 static int refresh_list(void)
@@ -87,7 +60,7 @@ static void redraw(void)
 {
     scr_draw_chrome("Home Assistant Control - HACLIENT",
                      "Arrows: Move  Enter: Toggle  R: Refresh  Esc: Quit",
-                     using_tcp ? "[TCP]" : "[SERIAL]");
+                     "[SERIAL]");
     scr_draw_list(entities, entity_count, selected);
 }
 
@@ -125,7 +98,6 @@ int main(void)
     }
 
     if (refresh_list() != 0) {
-        disconnect_transport();
         scr_shutdown();
         return 1;
     }
@@ -158,7 +130,6 @@ int main(void)
         }
     }
 
-    disconnect_transport();
     scr_shutdown();
     return 0;
 }
