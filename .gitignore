@@ -1,0 +1,7 @@
+bridge/config.ini
+__pycache__/
+*.pyc
+*.obj
+*.exe
+*.err
+.DS_Store
