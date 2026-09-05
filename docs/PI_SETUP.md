@@ -5,8 +5,10 @@
 Use the official **Raspberry Pi Imager** (https://www.raspberrypi.com/software/)
 on your Mac.
 
-1. Choose OS: **Raspberry Pi OS Lite (64-bit)** — no desktop needed, this
-   runs headless.
+1. Choose OS: **Raspberry Pi OS Lite (32-bit)** — no desktop needed, this
+   runs headless. (The original Pi Zero W's BCM2835/ARM11 chip is 32-bit
+   only, unlike the newer Pi Zero 2 W, so Imager won't even offer 64-bit
+   for it — that's expected, not a problem.)
 2. Choose storage: your microSD card.
 3. Click the **gear icon** (⚙) / "Edit Settings" before writing — this is
    the important part, it lets the Pi boot straight onto your WiFi with
