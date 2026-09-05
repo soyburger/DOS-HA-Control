@@ -39,7 +39,11 @@ The wire protocol between DOS and the bridge is documented in
 1. **Bridge**: see [bridge/](bridge/) — copy `config.example.ini` to
    `config.ini`, fill in your HA URL/token and the entities you want
    exposed, `pip install -r requirements.txt`, run `python3 ha_bridge.py`.
-   This part runs and has been tested against a mock HA server.
+   This part runs and has been tested against a mock HA server. For
+   running it on a Raspberry Pi as the physical bridge to a real 486, see
+   [docs/PI_SETUP.md](docs/PI_SETUP.md) (imaging, wiring the USB-serial
+   adapter, and installing it as a systemd service via
+   `bridge/deploy/install.sh`).
 2. **DOS client**: see [dos-client/docs/BUILD.md](dos-client/docs/BUILD.md)
    for the OpenWatcom build. Compiles clean and ran under DOSBox with no
    CPU exceptions — see the status table below.
