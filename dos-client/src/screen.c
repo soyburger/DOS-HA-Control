@@ -220,13 +220,51 @@ void scr_status_msg(const char *msg)
     vputs(SCR_ROWS - 1, 1, msg, ATTR(BLACK, CYAN));
 }
 
+/* Word-wraps msg (honoring embedded '\n' as an explicit break) into the
+ * alert box. Earlier this just vputs() the whole string on one row --
+ * with no wrapping, a message longer than the box (or containing a literal
+ * '\n', which isn't a real line break in video memory) would spill off the
+ * screen and collide with the "Press any key" prompt, garbling both. */
 void scr_alert(const char *title, const char *msg)
 {
-    int x1 = 15, y1 = 10, x2 = 65, y2 = 14;
+    int x1 = 12, y1 = 8, x2 = 68, y2 = 16;
+    int width = x2 - x1 - 4;
+    int max_row = y2 - 2;
+    int row = y1 + 2;
+    char line[128];
+    const char *p = msg;
+    int r;
 
     box(x1, y1, x2, y2, title);
-    vfill(y1 + 2, x1 + 2, x2 - x1 - 4, ' ', ATTR(LIGHTRED, COL_BG));
-    vputs(y1 + 2, x1 + 2, msg, ATTR(LIGHTRED, COL_BG));
+    for (r = y1 + 1; r < y2; r++)
+        vfill(r, x1 + 1, x2 - x1 - 1, ' ', ATTR(COL_BG, COL_BG));
+
+    while (*p && row <= max_row) {
+        int col = 0;
+        int last_space = -1;
+
+        while (p[col] && p[col] != '\n' && col < width) {
+            if (p[col] == ' ')
+                last_space = col;
+            col++;
+        }
+        /* if we hit the width limit mid-word, back up to the last space so
+         * we don't split a word across two lines */
+        if (col == width && p[col] != '\0' && p[col] != '\n' && last_space >= 0)
+            col = last_space;
+
+        memcpy(line, p, col);
+        line[col] = '\0';
+        vputs(row, x1 + 2, line, ATTR(LIGHTRED, COL_BG));
+        row++;
+
+        p += col;
+        while (*p == ' ')
+            p++;
+        if (*p == '\n')
+            p++;
+    }
+
     vputs(y2 - 1, x1 + 2, "Press any key...", ATTR(WHITE, COL_BG));
     getch();
 }
