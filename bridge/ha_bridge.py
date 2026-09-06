@@ -163,7 +163,7 @@ class TCPHandler(socketserver.StreamRequestHandler):
                 line = raw.decode("ascii", errors="replace")
                 LOG.debug("TCP %s > %r", peer, line.strip())
                 for reply in cmd_handler.handle(line):
-                    self.wfile.write((reply + LINE_END).encode("ascii"))
+                    self.wfile.write((reply + LINE_END).encode("ascii", errors="replace"))
         except (ConnectionResetError, BrokenPipeError):
             pass
         LOG.info("TCP disconnect %s", peer)
@@ -197,8 +197,11 @@ def run_serial(port: str, baud: int, cmd_handler: CommandHandler):
                     raw, buf = buf.split(b"\n", 1)
                     line = raw.decode("ascii", errors="replace")
                     LOG.debug("SER > %r", line.strip())
-                    for reply in cmd_handler.handle(line):
-                        ser.write((reply + LINE_END).encode("ascii"))
+                    try:
+                        for reply in cmd_handler.handle(line):
+                            ser.write((reply + LINE_END).encode("ascii", errors="replace"))
+                    except Exception:
+                        LOG.exception("Error handling serial line %r", line.strip())
             if len(buf) > MAX_LINE * 2:
                 buf = b""  # runaway line, drop it
 
