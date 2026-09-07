@@ -9,6 +9,7 @@
  */
 #include <dos.h>
 #include <conio.h>
+#include <i86.h>
 #include <string.h>
 #include <stdio.h>
 #include "screen.h"
@@ -57,11 +58,11 @@
 #define COL_ON     LIGHTGREEN
 #define COL_OFF    LIGHTRED
 
-static unsigned char far *video = (unsigned char far *) 0xB8000000L;
+static unsigned char _far *video = (unsigned char _far *) _MK_FP(0xB800, 0x0000);
 
 static void vputc(int row, int col, int ch, unsigned char attr)
 {
-    long off = ((long) row * SCR_COLS + col) * 2;
+    unsigned int off = ((unsigned int) row * SCR_COLS + col) * 2;
     video[off]     = (unsigned char) ch;
     video[off + 1] = attr;
 }
@@ -198,7 +199,7 @@ void scr_draw_list(const Entity *entities, int count, int selected)
             unsigned char bg = (i == selected) ? COL_SEL_BG : COL_BG;
             unsigned char rowattr = ATTR(fg, bg);
             unsigned char stateattr;
-            char namebuf[40];
+            char namebuf[64];
             char stbuf[20];
 
             stateattr = (i == selected) ? rowattr

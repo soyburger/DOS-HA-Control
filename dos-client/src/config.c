@@ -5,6 +5,10 @@
 #include "config.h"
 #include "net_serial.h"
 
+#if defined(__WATCOMC__) && !defined(stricmp)
+#define stricmp _stricmp
+#endif
+
 static void trim(char *s)
 {
     int len = (int) strlen(s);
@@ -55,6 +59,7 @@ int config_load(const char *path, Config *cfg)
         if (stricmp(key, "COM") == 0) {
             cfg->com_port = atoi(val) - 1; /* file uses 1-based COM1..4 */
             if (cfg->com_port < 0) cfg->com_port = 0;
+            if (cfg->com_port > 3) cfg->com_port = 3;
         } else if (stricmp(key, "BAUD") == 0) {
             cfg->baud_code = baud_code_from_int(atoi(val));
         } else if (stricmp(key, "TIMEOUT") == 0) {

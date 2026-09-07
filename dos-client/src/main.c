@@ -26,7 +26,12 @@ static Config cfg;
 static int connect_transport(void)
 {
     scr_status_msg("Opening COM port...");
-    serial_open(cfg.com_port, cfg.baud_code, cfg.timeout_ticks);
+    if (serial_open(cfg.com_port, cfg.baud_code, cfg.timeout_ticks) != 0) {
+        scr_alert("Port Error",
+                  "Configured COM port was not detected or is unavailable.\n"
+                  "Check your HACONFIG.INI settings.");
+        return -1;
+    }
     serial_get_transport(&transport);
 
     scr_status_msg("Pinging bridge...");

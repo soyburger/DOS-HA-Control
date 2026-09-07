@@ -4,6 +4,7 @@
  * which is plenty for a line-oriented text protocol.
  */
 #include <dos.h>
+#include <i86.h>
 #include <string.h>
 #include "net_serial.h"
 
@@ -21,7 +22,17 @@ static unsigned long bios_ticks(void)
 
 int serial_open(int port, int baud_code, int timeout_ticks)
 {
+    /* The BIOS records each detected COM port's I/O base address in the
+     * BIOS Data Area at 0040:0000 (COM1) through 0040:0006 (COM4), one
+     * 16-bit word per port, 0x0000 meaning "not present at boot." This is
+     * the same table DOS's own MODE command and every other well-behaved
+     * program checks before trusting a COM port exists -- INT 14h itself
+     * has no reliable way to report an absent port, but this does. */
+    unsigned int _far *bda_com = (unsigned int _far *) _MK_FP(0x0040, 0x0000);
     union REGS r;
+
+    if (port < 0 || port > 3 || bda_com[port] == 0)
+        return -1;
 
     s_port = port;
     s_timeout_ticks = timeout_ticks;
@@ -33,14 +44,11 @@ int serial_open(int port, int baud_code, int timeout_ticks)
     r.x.dx = port;
     int86(0x14, &r, &r);
 
-    /* AH bit7 of the returned line status = timeout/error on some BIOSes
-     * during init; the more reliable check is a status call. */
     r.h.ah = 0x03;
     r.x.dx = port;
     int86(0x14, &r, &r);
 
-    return 0; /* INT 14h has no reliable "port absent" signal; caller should
-                 confirm the link with proto_ping() after opening. */
+    return 0;
 }
 
 static int serial_putc(char c)
