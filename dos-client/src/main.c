@@ -90,12 +90,23 @@ static void do_toggle(void)
 
 int main(void)
 {
+    int baud_index;
+
     if (config_load("HACONFIG.INI", &cfg) != 0) {
         fprintf(stderr, "HACONFIG.INI not found in current directory; "
                          "using defaults.\n");
     }
 
+    /* Config stores baud as the raw INT14h code (SERIAL_BAUD_1200..
+     * SERIAL_BAUD_9600, i.e. 4..7); the settings screen works with a
+     * plain 0-3 index into {1200,2400,4800,9600}. */
+    baud_index = cfg.baud_code - SERIAL_BAUD_1200;
+    if (baud_index < 0 || baud_index > 3)
+        baud_index = 3; /* default 9600 */
+
     scr_init();
+    scr_settings(&cfg.com_port, &baud_index);
+    cfg.baud_code = SERIAL_BAUD_1200 + baud_index;
 
     if (connect_transport() != 0) {
         scr_shutdown();

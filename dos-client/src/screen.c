@@ -269,3 +269,55 @@ void scr_alert(const char *title, const char *msg)
     vputs(y2 - 1, x1 + 2, "Press any key...", ATTR(WHITE, COL_BG));
     getch();
 }
+
+static const char *BAUD_LABELS[4] = { "1200", "2400", "4800", "9600" };
+
+#define SK_LEFT  75
+#define SK_RIGHT 77
+#define SK_UP    72
+#define SK_DOWN  80
+#define SK_ENTER 13
+
+void scr_settings(int *com_port, int *baud_index)
+{
+    int x1 = 20, y1 = 8, x2 = 60, y2 = 15;
+
+    for (;;) {
+        char buf[40];
+        int r;
+
+        box(x1, y1, x2, y2, "Port Settings");
+        for (r = y1 + 1; r < y2; r++)
+            vfill(r, x1 + 1, x2 - x1 - 1, ' ', ATTR(COL_FG, COL_BG));
+
+        sprintf(buf, "COM Port:   COM%d", *com_port + 1);
+        vputs(y1 + 1, x1 + 2, buf, ATTR(COL_FG, COL_BG));
+        vputs(y1 + 2, x1 + 2, "            (Left/Right to change)",
+              ATTR(LIGHTGRAY, COL_BG));
+
+        sprintf(buf, "Baud Rate:  %s", BAUD_LABELS[*baud_index]);
+        vputs(y1 + 4, x1 + 2, buf, ATTR(COL_FG, COL_BG));
+        vputs(y1 + 5, x1 + 2, "            (Up/Down to change)",
+              ATTR(LIGHTGRAY, COL_BG));
+
+        vputs(y2 - 1, x1 + 2, "Press ENTER to connect", ATTR(WHITE, COL_BG));
+
+        {
+            int c = getch();
+
+            if (c == 0 || c == 224) {
+                c = getch();
+                if (c == SK_LEFT)
+                    *com_port = (*com_port + 3) % 4;
+                else if (c == SK_RIGHT)
+                    *com_port = (*com_port + 1) % 4;
+                else if (c == SK_UP)
+                    *baud_index = (*baud_index + 1) % 4;
+                else if (c == SK_DOWN)
+                    *baud_index = (*baud_index + 3) % 4;
+            } else if (c == SK_ENTER) {
+                break;
+            }
+        }
+    }
+}
