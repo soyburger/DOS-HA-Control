@@ -5,6 +5,7 @@
  */
 #include <dos.h>
 #include <i86.h>
+#include <conio.h>
 #include <string.h>
 #include "net_serial.h"
 
@@ -29,10 +30,13 @@ int serial_open(int port, int baud_code, int timeout_ticks)
      * program checks before trusting a COM port exists -- INT 14h itself
      * has no reliable way to report an absent port, but this does. */
     unsigned int _far *bda_com = (unsigned int _far *) _MK_FP(0x0040, 0x0000);
+    unsigned int io_base;
     union REGS r;
 
     if (port < 0 || port > 3 || bda_com[port] == 0)
         return -1;
+
+    io_base = bda_com[port];
 
     s_port = port;
     s_timeout_ticks = timeout_ticks;
@@ -47,6 +51,13 @@ int serial_open(int port, int baud_code, int timeout_ticks)
     r.h.ah = 0x03;
     r.x.dx = port;
     int86(0x14, &r, &r);
+
+    /* BIOS's AH=00 initialize does NOT reliably assert DTR/RTS on every
+     * BIOS -- some real hardware and USB-serial adapters won't treat
+     * incoming data as valid (or the link as "connected" at all) until
+     * these modem-control lines are up. Set them directly on the UART's
+     * Modem Control Register (I/O base + 4): bit0=DTR, bit1=RTS. */
+    outp(io_base + 4, 0x03);
 
     return 0;
 }
