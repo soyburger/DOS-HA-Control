@@ -11,8 +11,10 @@ typedef struct {
     char entity_id[PROTO_ID_LEN];
     char friendly_name[PROTO_NAME_LEN];
     char state[PROTO_STATE_LEN];
-    int brightness; /* 0-100, or -1 if this entity doesn't support it */
-    int hue;         /* 0-359, or -1 if this entity doesn't support it */
+    int brightness; /* 0-100, or -1 if unsupported */
+    int r, g, b;      /* 0-255 each, or -1/-1/-1 together if unsupported */
+    int temp_k;       /* current color temp in Kelvin, or -1 if unsupported */
+    int min_k, max_k; /* this entity's own supported Kelvin range */
 } Entity;
 
 /* Transport function pointers: >=0 bytes read/written on success, <0 on error. */
@@ -38,12 +40,18 @@ int proto_get(Transport *t, const char *entity_id, char *state);
 int proto_service(Transport *t, const char *cmd, const char *entity_id,
                    char *err, int err_len);
 
-/* hue: 0-359. Returns 0 on success, -1 on error (err filled as above). */
-int proto_set_color(Transport *t, const char *entity_id, int hue,
-                     char *err, int err_len);
-
 /* pct: 0-100. Returns 0 on success, -1 on error (err filled as above). */
 int proto_set_brightness(Transport *t, const char *entity_id, int pct,
                           char *err, int err_len);
+
+/* r/g/b: 0-255 each. Switches the light out of color-temp mode.
+   Returns 0 on success, -1 on error (err filled as above). */
+int proto_set_rgb(Transport *t, const char *entity_id, int r, int g, int b,
+                   char *err, int err_len);
+
+/* kelvin: within the entity's own min_k/max_k. Switches the light out of
+   RGB mode. Returns 0 on success, -1 on error (err filled as above). */
+int proto_set_temp(Transport *t, const char *entity_id, int kelvin,
+                    char *err, int err_len);
 
 #endif

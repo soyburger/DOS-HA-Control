@@ -16,11 +16,20 @@ void scr_draw_chrome(const char *title, const char *status_left,
  * Returns nothing; call scr_draw_chrome first. */
 void scr_draw_list(const Entity *entities, int count, int selected);
 
-/* Which option is Left/Right-focused in the options panel below the list. */
-typedef enum { OPT_POWER = 0, OPT_COLOR = 1, OPT_BRIGHTNESS = 2 } OptionKind;
+/* Which field is Up/Down-selected in the options panel. Only fields the
+ * entity actually supports are ever focusable -- see main.c's cycle_focus. */
+typedef enum {
+    OPT_POWER = 0,
+    OPT_BRIGHTNESS = 1,
+    OPT_R = 2,
+    OPT_G = 3,
+    OPT_B = 4,
+    OPT_TEMP = 5
+} OptionKind;
 
-/* Draws Power (always) and Color/Brightness (only if entity `e` supports
- * them, i.e. hue/brightness >= 0) with `focused` highlighted. Call after
+/* Draws Power (always) and Brightness/R/G/B/Color Temp (only for fields
+ * entity `e` supports) as bar graphs, with `focused` highlighted (Left/
+ * Right adjusts it live -- there's no separate edit mode). Call after
  * scr_draw_chrome and scr_draw_list. */
 void scr_draw_options(const Entity *e, int focused);
 

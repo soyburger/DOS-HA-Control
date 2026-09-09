@@ -87,27 +87,43 @@ def domain_of(entity_id: str) -> str:
 COLOR_MODES = {"hs", "rgb", "rgbw", "rgbww", "xy"}
 
 
-def brightness_and_hue(full_state: dict) -> tuple[int, int]:
-    """Returns (brightness_pct, hue_deg), each -1 if the entity doesn't
-    support it. Derived from HA's own supported_color_modes attribute --
-    not something we configure by hand, so a plain switch always gets
-    (-1, -1) and a color light reports whatever it actually supports."""
+def light_fields(full_state: dict) -> dict:
+    """Returns brightness_pct, r/g/b, and temp_k/min_k/max_k -- each -1 (r/g/b
+    and temp_k/min_k/max_k always together as a group) if the entity doesn't
+    support it. Derived from HA's own supported_color_modes attribute, not
+    configured by hand, so a plain switch reports -1 across the board."""
     attrs = full_state.get("attributes", {})
     modes = set(attrs.get("supported_color_modes") or [])
 
     brightness_pct = -1
-    if modes & COLOR_MODES or "brightness" in modes:
+    if modes & COLOR_MODES or "brightness" in modes or "color_temp" in modes:
         raw = attrs.get("brightness")
         if raw is not None:
             brightness_pct = round(raw / 255 * 100)
 
-    hue = -1
+    r = g = b = -1
     if modes & COLOR_MODES:
-        hs = attrs.get("hs_color")
-        if hs is not None:
-            hue = round(hs[0]) % 360
+        rgb = attrs.get("rgb_color")
+        if rgb is not None:
+            r, g, b = rgb[0], rgb[1], rgb[2]
 
-    return brightness_pct, hue
+    temp_k = min_k = max_k = -1
+    if "color_temp" in modes:
+        min_k = attrs.get("min_color_temp_kelvin", -1)
+        max_k = attrs.get("max_color_temp_kelvin", -1)
+        temp_k = attrs.get("color_temp_kelvin", -1)
+        if min_k is None:
+            min_k = -1
+        if max_k is None:
+            max_k = -1
+        if temp_k is None:
+            temp_k = -1
+
+    return {
+        "brightness_pct": brightness_pct,
+        "r": r, "g": g, "b": b,
+        "temp_k": temp_k, "min_k": min_k, "max_k": max_k,
+    }
 
 
 class CommandHandler:
@@ -134,10 +150,12 @@ class CommandHandler:
                 return self._get(arg)
             if cmd in ("ON", "OFF", "TOGGLE"):
                 return self._service(cmd, arg)
-            if cmd == "SETCOLOR":
-                return self._setcolor(arg)
             if cmd == "SETBRIGHT":
                 return self._setbright(arg)
+            if cmd == "SETRGB":
+                return self._setrgb(arg)
+            if cmd == "SETTEMP":
+                return self._settemp(arg)
             return [f"ERR|unknown command {cmd}"]
         except requests.HTTPError as exc:
             return [f"ERR|HA HTTP {exc.response.status_code}"]
@@ -150,12 +168,15 @@ class CommandHandler:
             try:
                 full = self.ha.get_full_state(ent.entity_id)
                 state = full["state"]
-                brightness_pct, hue = brightness_and_hue(full)
+                f = light_fields(full)
             except requests.RequestException:
-                state, brightness_pct, hue = "unknown", -1, -1
+                state = "unknown"
+                f = {"brightness_pct": -1, "r": -1, "g": -1, "b": -1,
+                     "temp_k": -1, "min_k": -1, "max_k": -1}
             out.append(
                 f"ENTITY|{ent.entity_id}|{ent.friendly_name}|{state}"
-                f"|{brightness_pct}|{hue}"
+                f"|{f['brightness_pct']}|{f['r']}|{f['g']}|{f['b']}"
+                f"|{f['temp_k']}|{f['min_k']}|{f['max_k']}"
             )
         out.append("END")
         return out
@@ -174,21 +195,37 @@ class CommandHandler:
         self.ha.call_service(domain, service, entity_id)
         return ["OK"]
 
-    def _setcolor(self, arg: str) -> list[str]:
-        parts = arg.split(None, 1)
-        if len(parts) != 2:
-            return ["ERR|usage: SETCOLOR <entity_id> <hue>"]
-        entity_id, hue_str = parts
+    def _setrgb(self, arg: str) -> list[str]:
+        parts = arg.split()
+        if len(parts) != 4:
+            return ["ERR|usage: SETRGB <entity_id> <r> <g> <b>"]
+        entity_id, r_str, g_str, b_str = parts
         if entity_id not in self.entities:
             return [f"ERR|unknown entity {entity_id}"]
         if domain_of(entity_id) != "light":
             return [f"ERR|{entity_id} is not a light"]
         try:
-            hue = int(hue_str) % 360
+            rgb = [max(0, min(255, int(v))) for v in (r_str, g_str, b_str)]
         except ValueError:
-            return [f"ERR|bad hue {hue_str}"]
+            return [f"ERR|bad RGB {r_str} {g_str} {b_str}"]
+        self.ha.call_service("light", "turn_on", entity_id, extra={"rgb_color": rgb})
+        return ["OK"]
+
+    def _settemp(self, arg: str) -> list[str]:
+        parts = arg.split(None, 1)
+        if len(parts) != 2:
+            return ["ERR|usage: SETTEMP <entity_id> <kelvin>"]
+        entity_id, k_str = parts
+        if entity_id not in self.entities:
+            return [f"ERR|unknown entity {entity_id}"]
+        if domain_of(entity_id) != "light":
+            return [f"ERR|{entity_id} is not a light"]
+        try:
+            kelvin = int(k_str)
+        except ValueError:
+            return [f"ERR|bad kelvin {k_str}"]
         self.ha.call_service(
-            "light", "turn_on", entity_id, extra={"hs_color": [hue, 100]}
+            "light", "turn_on", entity_id, extra={"color_temp_kelvin": kelvin}
         )
         return ["OK"]
 

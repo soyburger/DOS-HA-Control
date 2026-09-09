@@ -31,34 +31,39 @@ transport back later wouldn't touch the protocol logic.
 | `ON <entity_id>`               | Call `turn_on`.                                |
 | `OFF <entity_id>`              | Call `turn_off`.                                |
 | `TOGGLE <entity_id>`           | Call `toggle`.                                  |
-| `SETCOLOR <entity_id> <hue>`   | Set hue (0-359, full saturation). Only valid for entities the `LIST` reply marked color-capable. |
-| `SETBRIGHT <entity_id> <pct>`  | Set brightness (0-100%). Only valid for entities the `LIST` reply marked brightness-capable. |
+| `SETBRIGHT <entity_id> <pct>`  | Set brightness (0-100%). Only valid for entities `LIST` marked brightness-capable. |
+| `SETRGB <entity_id> <r> <g> <b>` | Set RGB color (0-255 each). Switches the light out of color-temp mode. Only valid for entities `LIST` marked RGB-capable. |
+| `SETTEMP <entity_id> <kelvin>` | Set white color temperature in Kelvin. Switches the light out of RGB mode. Only valid for entities `LIST` marked color-temp-capable (clamped to that entity's own min/max range). |
 
 ## Replies (bridge -> DOS)
 
 | Reply                                                                | Meaning                              |
 |------------------------------------------------------------------------|----------------------------------------|
 | `PONG`                                                                 | Reply to `PING`.                       |
-| `ENTITY\|<id>\|<name>\|<state>\|<brightness>\|<hue>`                   | One row of a `LIST` reply. `brightness` is 0-100 or `-1` if unsupported; `hue` is 0-359 or `-1` if unsupported. |
+| `ENTITY\|<id>\|<name>\|<state>\|<brightness>\|<r>\|<g>\|<b>\|<temp_k>\|<min_k>\|<max_k>` | One row of a `LIST` reply. Each of `brightness`/`r,g,b` (always together)/`temp_k,min_k,max_k` (always together) is `-1` if that entity doesn't support it. |
 | `END`                                                                  | Terminates a `LIST` reply.             |
 | `STATE\|<id>\|<state>`                                                 | Reply to `GET`.                        |
-| `OK`                                                                   | Command succeeded (`ON`/`OFF`/`TOGGLE`/`SETCOLOR`/`SETBRIGHT`). |
+| `OK`                                                                   | Command succeeded (`ON`/`OFF`/`TOGGLE`/`SETBRIGHT`/`SETRGB`/`SETTEMP`). |
 | `ERR\|<message>`                                                       | Command failed; message is one line, no `\|`. |
 
-Whether an entity supports color/brightness is derived from Home
+Whether an entity supports brightness/RGB/color-temp is derived from Home
 Assistant's own `supported_color_modes` attribute on that entity, not
 configured by hand — a plain `switch.*` entity will always report `-1`
-for both.
+for all of them. `min_k`/`max_k` come from that entity's own
+`min_color_temp_kelvin`/`max_color_temp_kelvin` attributes, since real
+bulbs vary in their supported range.
 
 ## Example session
 
 ```
 > LIST
-< ENTITY|light.kitchen|Kitchen Light|on|80|45
-< ENTITY|light.hallway|Hallway Light|off|-1|-1
-< ENTITY|switch.fan|Office Fan|off|-1|-1
+< ENTITY|light.kitchen|Kitchen Light|on|80|255|180|60|-1|-1|-1
+< ENTITY|light.hallway|Hallway Light|off|-1|-1|-1|-1|-1|-1|-1
+< ENTITY|switch.fan|Office Fan|off|-1|-1|-1|-1|-1|-1|-1
 < END
-> SETCOLOR light.kitchen 200
+> SETRGB light.kitchen 255 100 50
+< OK
+> SETTEMP light.kitchen 4000
 < OK
 > SETBRIGHT light.kitchen 50
 < OK

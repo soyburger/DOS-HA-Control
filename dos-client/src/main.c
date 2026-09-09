@@ -16,32 +16,66 @@
 #define KEY_DOWN  80
 #define KEY_LEFT  75
 #define KEY_RIGHT 77
-#define KEY_SHIFT_TAB 15
 #define KEY_ESC   27
 #define KEY_ENTER 13
-#define KEY_TAB   9
+
+#define MODE_LIST    0
+#define MODE_OPTIONS 1
 
 static Entity entities[PROTO_MAX_ENTITIES];
 static int entity_count = 0;
 static int selected = 0;
 static int focused = OPT_POWER;
+static int mode = MODE_LIST;
 static Transport transport;
 static Config cfg;
 
 /* Keeps `focused` valid for whichever entity is currently selected -- e.g.
- * landing on Color for a light, then Tab-ing to a plain switch, should
- * fall back to Power rather than pointing at an option that entity
- * doesn't have. */
+ * landing on R/G/B for a color light, then backing out and picking a
+ * plain switch, should fall back to Power rather than pointing at a
+ * field that entity doesn't have. */
 static void clamp_focus(void)
 {
+    Entity *e;
+
     if (entity_count == 0) {
         focused = OPT_POWER;
         return;
     }
-    if (focused == OPT_COLOR && entities[selected].hue < 0)
+    e = &entities[selected];
+    if (focused == OPT_BRIGHTNESS && e->brightness < 0) focused = OPT_POWER;
+    if ((focused == OPT_R || focused == OPT_G || focused == OPT_B) && e->r < 0)
         focused = OPT_POWER;
-    if (focused == OPT_BRIGHTNESS && entities[selected].brightness < 0)
-        focused = OPT_POWER;
+    if (focused == OPT_TEMP && e->min_k < 0) focused = OPT_POWER;
+}
+
+static int field_supported(const Entity *e, int f)
+{
+    switch (f) {
+        case OPT_POWER:      return 1;
+        case OPT_BRIGHTNESS: return e->brightness >= 0;
+        case OPT_R:
+        case OPT_G:
+        case OPT_B:          return e->r >= 0;
+        case OPT_TEMP:       return e->min_k >= 0;
+        default:              return 0;
+    }
+}
+
+/* Cycles `focused` forward (dir=1) or backward (dir=-1) among the fields
+ * the current entity actually supports. */
+static void cycle_focus(int dir)
+{
+    int i;
+
+    if (entity_count == 0)
+        return;
+
+    for (i = 0; i < 6; i++) {
+        focused = (focused + dir + 6) % 6;
+        if (field_supported(&entities[selected], focused))
+            return;
+    }
 }
 
 static int connect_transport(void)
@@ -85,54 +119,23 @@ static int refresh_list(void)
 
 static void redraw(void)
 {
-    scr_draw_chrome("Home Assistant Control - HACLIENT",
-                     "Tab: Light  L/R: Option  U/D: Adjust  Enter: Set  Esc: Quit",
-                     "[SERIAL]");
+    if (mode == MODE_LIST) {
+        scr_draw_chrome("Home Assistant Control",
+                        "Up/Down: Select  Enter: Options  R: Refresh  Esc: Quit",
+                        "[SERIAL]");
+    } else {
+        scr_draw_chrome("Home Assistant Control",
+                        "Left/Right: Field  Up/Down: Adjust  Enter: Set  Esc: Back",
+                        "[SERIAL]");
+    }
     scr_draw_list(entities, entity_count, selected);
     if (entity_count > 0)
         scr_draw_options(&entities[selected], focused);
 }
 
-/* Cycles `focused` forward (dir=1) or backward (dir=-1) among the options
- * the current entity actually supports -- Color/Brightness are skipped
- * for a plain switch, matching what scr_draw_options chooses to show. */
-static void cycle_focus(int dir)
-{
-    int i;
-
-    if (entity_count == 0)
-        return;
-
-    for (i = 0; i < 3; i++) {
-        focused = (focused + dir + 3) % 3;
-        if (focused == OPT_POWER) return;
-        if (focused == OPT_COLOR && entities[selected].hue >= 0) return;
-        if (focused == OPT_BRIGHTNESS && entities[selected].brightness >= 0) return;
-    }
-}
-
-static void do_toggle(void)
-{
-    char err[64];
-
-    if (entity_count == 0)
-        return;
-
-    scr_status_msg("Sending TOGGLE...");
-    if (proto_service(&transport, "TOGGLE", entities[selected].entity_id,
-                       err, sizeof(err)) != 0) {
-        scr_alert("Command Failed", err);
-        return;
-    }
-
-    /* Optimistic flip; a refresh (R) will resync if HA disagrees. */
-    strcpy(entities[selected].state,
-           strcmp(entities[selected].state, "on") == 0 ? "off" : "on");
-}
-
-/* Up/Down adjust the focused option's value on screen only -- no command
- * is sent per keypress, since a 9600-baud link is too slow for that.
- * Enter (do_commit) is what actually transmits the pending value. */
+/* Up/Down adjust the focused field's value on screen only -- no command is
+ * sent per keypress, since a 9600-baud link is too slow for that. Enter
+ * (do_commit) is what actually transmits the pending value. */
 static void adjust_focused(int delta)
 {
     Entity *e = &entities[selected];
@@ -140,12 +143,35 @@ static void adjust_focused(int delta)
     if (entity_count == 0)
         return;
 
-    if (focused == OPT_COLOR && e->hue >= 0) {
-        e->hue = (e->hue + delta * 15 + 360) % 360;
-    } else if (focused == OPT_BRIGHTNESS && e->brightness >= 0) {
-        e->brightness += delta * 10;
-        if (e->brightness < 0) e->brightness = 0;
-        if (e->brightness > 100) e->brightness = 100;
+    switch (focused) {
+        case OPT_POWER:
+            strcpy(e->state, delta > 0 ? "on" : "off");
+            break;
+        case OPT_BRIGHTNESS:
+            e->brightness += delta * 10;
+            if (e->brightness < 0) e->brightness = 0;
+            if (e->brightness > 100) e->brightness = 100;
+            break;
+        case OPT_R:
+            e->r += delta * 15;
+            if (e->r < 0) e->r = 0;
+            if (e->r > 255) e->r = 255;
+            break;
+        case OPT_G:
+            e->g += delta * 15;
+            if (e->g < 0) e->g = 0;
+            if (e->g > 255) e->g = 255;
+            break;
+        case OPT_B:
+            e->b += delta * 15;
+            if (e->b < 0) e->b = 0;
+            if (e->b > 255) e->b = 255;
+            break;
+        case OPT_TEMP:
+            e->temp_k += delta * 100;
+            if (e->temp_k < e->min_k) e->temp_k = e->min_k;
+            if (e->temp_k > e->max_k) e->temp_k = e->max_k;
+            break;
     }
 }
 
@@ -158,13 +184,9 @@ static void do_commit(void)
         return;
 
     if (focused == OPT_POWER) {
-        do_toggle();
-        return;
-    }
-
-    if (focused == OPT_COLOR) {
-        scr_status_msg("Setting color...");
-        if (proto_set_color(&transport, e->entity_id, e->hue, err, sizeof(err)) != 0)
+        const char *cmd = strcmp(e->state, "on") == 0 ? "ON" : "OFF";
+        scr_status_msg("Setting power...");
+        if (proto_service(&transport, cmd, e->entity_id, err, sizeof(err)) != 0)
             scr_alert("Command Failed", err);
         return;
     }
@@ -173,6 +195,22 @@ static void do_commit(void)
         scr_status_msg("Setting brightness...");
         if (proto_set_brightness(&transport, e->entity_id, e->brightness,
                                   err, sizeof(err)) != 0)
+            scr_alert("Command Failed", err);
+        return;
+    }
+
+    if (focused == OPT_R || focused == OPT_G || focused == OPT_B) {
+        scr_status_msg("Setting color...");
+        if (proto_set_rgb(&transport, e->entity_id, e->r, e->g, e->b,
+                           err, sizeof(err)) != 0)
+            scr_alert("Command Failed", err);
+        return;
+    }
+
+    if (focused == OPT_TEMP) {
+        scr_status_msg("Setting color temp...");
+        if (proto_set_temp(&transport, e->entity_id, e->temp_k,
+                            err, sizeof(err)) != 0)
             scr_alert("Command Failed", err);
     }
 }
@@ -214,40 +252,57 @@ int main(void)
 
         if (c == 0 || c == 224) { /* extended key prefix */
             c = getch();
-            if (c == KEY_UP) {
-                adjust_focused(1);
-                redraw();
-            } else if (c == KEY_DOWN) {
-                adjust_focused(-1);
-                redraw();
-            } else if (c == KEY_LEFT) {
-                cycle_focus(-1);
-                redraw();
-            } else if (c == KEY_RIGHT) {
-                cycle_focus(1);
-                redraw();
-            } else if (c == KEY_SHIFT_TAB) {
-                if (entity_count > 0)
-                    selected = (selected + entity_count - 1) % entity_count;
-                clamp_focus();
-                redraw();
+
+            if (mode == MODE_LIST) {
+                if (c == KEY_UP) {
+                    if (entity_count > 0)
+                        selected = (selected + entity_count - 1) % entity_count;
+                    clamp_focus();
+                    redraw();
+                } else if (c == KEY_DOWN) {
+                    if (entity_count > 0)
+                        selected = (selected + 1) % entity_count;
+                    clamp_focus();
+                    redraw();
+                }
+            } else { /* MODE_OPTIONS */
+                if (c == KEY_UP) {
+                    adjust_focused(1);
+                    redraw();
+                } else if (c == KEY_DOWN) {
+                    adjust_focused(-1);
+                    redraw();
+                } else if (c == KEY_LEFT) {
+                    cycle_focus(-1);
+                    redraw();
+                } else if (c == KEY_RIGHT) {
+                    cycle_focus(1);
+                    redraw();
+                }
             }
             continue;
         }
 
-        if (c == KEY_TAB) {
-            if (entity_count > 0)
-                selected = (selected + 1) % entity_count;
-            clamp_focus();
-            redraw();
-        } else if (c == KEY_ENTER) {
-            do_commit();
+        if (c == KEY_ENTER) {
+            if (mode == MODE_LIST) {
+                if (entity_count > 0) {
+                    mode = MODE_OPTIONS;
+                    clamp_focus();
+                }
+            } else {
+                do_commit();
+            }
             redraw();
         } else if (c == 'r' || c == 'R') {
             refresh_list();
             redraw();
         } else if (c == KEY_ESC) {
-            break;
+            if (mode == MODE_OPTIONS) {
+                mode = MODE_LIST;
+                redraw();
+            } else {
+                break;
+            }
         }
     }
 

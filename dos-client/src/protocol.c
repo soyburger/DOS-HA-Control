@@ -45,7 +45,7 @@ int proto_list(Transport *t, Entity *entities, int max)
         return -1;
 
     for (;;) {
-        char *fields[6];
+        char *fields[11];
         int nf;
 
         if (t->read_line(linebuf, sizeof(linebuf)) < 0)
@@ -60,8 +60,8 @@ int proto_list(Transport *t, Entity *entities, int max)
         if (count >= max)
             continue; /* keep draining until END even if we're full */
 
-        nf = split_pipes(linebuf, fields, 6);
-        if (nf < 6)
+        nf = split_pipes(linebuf, fields, 11);
+        if (nf < 11)
             continue;
 
         strncpy(entities[count].entity_id, fields[1], PROTO_ID_LEN - 1);
@@ -71,7 +71,12 @@ int proto_list(Transport *t, Entity *entities, int max)
         strncpy(entities[count].state, fields[3], PROTO_STATE_LEN - 1);
         entities[count].state[PROTO_STATE_LEN - 1] = '\0';
         entities[count].brightness = atoi(fields[4]);
-        entities[count].hue = atoi(fields[5]);
+        entities[count].r = atoi(fields[5]);
+        entities[count].g = atoi(fields[6]);
+        entities[count].b = atoi(fields[7]);
+        entities[count].temp_k = atoi(fields[8]);
+        entities[count].min_k = atoi(fields[9]);
+        entities[count].max_k = atoi(fields[10]);
         count++;
     }
 
@@ -134,20 +139,29 @@ int proto_service(Transport *t, const char *cmd, const char *entity_id,
     return send_and_check(t, line, err, err_len);
 }
 
-int proto_set_color(Transport *t, const char *entity_id, int hue,
-                     char *err, int err_len)
-{
-    char line[PROTO_ID_LEN + 20];
-
-    sprintf(line, "SETCOLOR %s %d", entity_id, hue);
-    return send_and_check(t, line, err, err_len);
-}
-
 int proto_set_brightness(Transport *t, const char *entity_id, int pct,
                           char *err, int err_len)
 {
     char line[PROTO_ID_LEN + 20];
 
     sprintf(line, "SETBRIGHT %s %d", entity_id, pct);
+    return send_and_check(t, line, err, err_len);
+}
+
+int proto_set_rgb(Transport *t, const char *entity_id, int r, int g, int b,
+                   char *err, int err_len)
+{
+    char line[PROTO_ID_LEN + 30];
+
+    sprintf(line, "SETRGB %s %d %d %d", entity_id, r, g, b);
+    return send_and_check(t, line, err, err_len);
+}
+
+int proto_set_temp(Transport *t, const char *entity_id, int kelvin,
+                    char *err, int err_len)
+{
+    char line[PROTO_ID_LEN + 20];
+
+    sprintf(line, "SETTEMP %s %d", entity_id, kelvin);
     return send_and_check(t, line, err, err_len);
 }

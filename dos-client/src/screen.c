@@ -1,5 +1,5 @@
-/* DOS Shell-look text UI: white-on-blue chrome, single-line box drawing
- * (CP437), a highlighted list, and a status line.
+/* DOS Shell-look text UI: magenta/yellow chrome, cyan body, a device list
+ * on the left and a bar-graph options panel on the right.
  *
  * Writes directly to text-mode video memory at B800:0000 rather than using
  * Borland's textcolor()/gotoxy()/clrscr() -- OpenWatcom's conio.h doesn't
@@ -17,13 +17,17 @@
 #define SCR_ROWS 25
 #define SCR_COLS 80
 
-#define LIST_TOP    4
-#define LIST_BOTTOM (SCR_ROWS - 8) /* leaves room for the options panel below */
-#define LIST_LEFT   2
-#define LIST_RIGHT  (SCR_COLS - 3)
+/* Left: device list. Right: options panel. Side by side, both boxes the
+ * same top/bottom. */
+#define LIST_X1 1
+#define LIST_Y1 2
+#define LIST_X2 26
+#define LIST_Y2 22
 
-#define OPT_TOP    (LIST_BOTTOM + 3)
-#define OPT_BOTTOM (OPT_TOP + 3)
+#define OPT_X1 (LIST_X2 + 2)
+#define OPT_Y1 2
+#define OPT_X2 (SCR_COLS - 2)
+#define OPT_Y2 22
 
 /* CP437 box-drawing characters */
 #define CH_TL 201  /* double top-left corner */
@@ -32,6 +36,7 @@
 #define CH_BR 188
 #define CH_H  205
 #define CH_V  186
+#define CH_BLOCK 219 /* solid block, used for bar fill */
 
 /* Standard 4-bit CGA/EGA/VGA text attribute palette (index, not RGB). */
 #define BLACK        0
@@ -53,13 +58,14 @@
 
 #define ATTR(fg, bg) (unsigned char) (((bg) << 4) | (fg))
 
-#define COL_BG     BLUE
-#define COL_FG     WHITE
-#define COL_TITLE  YELLOW
-#define COL_SEL_BG CYAN
-#define COL_SEL_FG BLACK
-#define COL_ON     LIGHTGREEN
-#define COL_OFF    LIGHTRED
+#define COL_BG      CYAN
+#define COL_FG      LIGHTMAGENTA  /* body text, borders */
+#define COL_TITLE   YELLOW        /* box border titles */
+#define COL_ACCENT_BG MAGENTA     /* title bar, status bar, selection */
+#define COL_ACCENT_FG YELLOW      /* title bar / status bar text */
+#define COL_SEL_FG  WHITE         /* selected list row / focused field text */
+#define COL_ON      LIGHTGREEN
+#define COL_OFF     LIGHTRED
 
 static unsigned char _far *video = (unsigned char _far *) _MK_FP(0xB800, 0x0000);
 
@@ -86,6 +92,35 @@ static void vfill(int row, int col, int len, int ch, unsigned char attr)
 static void vfill_row(int row, unsigned char attr)
 {
     vfill(row, 0, SCR_COLS, ' ', attr);
+}
+
+/* Fills a rectangle (inclusive of both corners) with a blank space in the
+ * given attribute -- used to clear a box's interior before redrawing it. */
+static void vfill_rect(int x1, int y1, int x2, int y2, unsigned char attr)
+{
+    int y;
+    for (y = y1; y <= y2; y++)
+        vfill(y, x1, x2 - x1 + 1, ' ', attr);
+}
+
+/* Vertical bar graph: `height` rows tall starting at (x, y_top), `width`
+ * columns wide, filled from the bottom up to reflect value/[min,max]. */
+static void vbar(int x, int y_top, int width, int height,
+                  int value, int min_val, int max_val, unsigned char fill_attr)
+{
+    int range = max_val - min_val;
+    int filled = (range > 0) ? ((value - min_val) * height) / range : 0;
+    int row;
+
+    if (filled < 0) filled = 0;
+    if (filled > height) filled = height;
+
+    for (row = 0; row < height; row++) {
+        int from_bottom = height - 1 - row;
+        int is_filled = from_bottom < filled;
+        vfill(y_top + row, x, width, is_filled ? CH_BLOCK : ' ',
+              is_filled ? fill_attr : ATTR(COL_FG, COL_BG));
+    }
 }
 
 static void set_cursor_visible(int visible)
@@ -166,125 +201,118 @@ void scr_draw_chrome(const char *title, const char *status_left,
         vfill_row(r, ATTR(COL_FG, COL_BG));
 
     /* Title bar */
-    vfill_row(0, ATTR(BLACK, CYAN));
+    vfill_row(0, ATTR(COL_ACCENT_FG, COL_ACCENT_BG));
     pad = (SCR_COLS - (int) strlen(title)) / 2;
     if (pad < 0) pad = 0;
-    vputs(0, pad, title, ATTR(BLACK, CYAN));
+    vputs(0, pad, title, ATTR(COL_ACCENT_FG, COL_ACCENT_BG));
 
-    box(LIST_LEFT - 1, LIST_TOP - 1, LIST_RIGHT + 1, LIST_BOTTOM + 1,
-        "Home Assistant Devices");
-    box(LIST_LEFT - 1, OPT_TOP, LIST_RIGHT + 1, OPT_BOTTOM, "Options");
+    box(LIST_X1, LIST_Y1, LIST_X2, LIST_Y2, "Home Assistant Devices");
+    box(OPT_X1, OPT_Y1, OPT_X2, OPT_Y2, "Options");
 
     /* Status bar */
-    vfill_row(SCR_ROWS - 1, ATTR(BLACK, CYAN));
-    vputs(SCR_ROWS - 1, 1, status_left, ATTR(BLACK, CYAN));
+    vfill_row(SCR_ROWS - 1, ATTR(COL_ACCENT_FG, COL_ACCENT_BG));
+    vputs(SCR_ROWS - 1, 1, status_left, ATTR(COL_ACCENT_FG, COL_ACCENT_BG));
     if (status_right) {
         int x = SCR_COLS - (int) strlen(status_right) - 2;
-        vputs(SCR_ROWS - 1, x, status_right, ATTR(BLACK, CYAN));
+        vputs(SCR_ROWS - 1, x, status_right, ATTR(COL_ACCENT_FG, COL_ACCENT_BG));
     }
 }
 
 void scr_draw_list(const Entity *entities, int count, int selected)
 {
     int row, i;
-    int visible = LIST_BOTTOM - LIST_TOP;
+    int visible = LIST_Y2 - LIST_Y1 - 1;
+    int width = LIST_X2 - LIST_X1 - 1;
 
     for (row = 0; row < visible; row++) {
         i = row; /* no scrolling yet -- fine for a handful of entities */
 
         if (i >= count) {
-            vfill(LIST_TOP + row, LIST_LEFT, LIST_RIGHT - LIST_LEFT, ' ',
-                  ATTR(COL_BG, COL_BG));
+            vfill(LIST_Y1 + 1 + row, LIST_X1 + 1, width, ' ', ATTR(COL_FG, COL_BG));
             continue;
         }
 
         {
-            unsigned char fg = (i == selected) ? COL_SEL_FG : COL_FG;
-            unsigned char bg = (i == selected) ? COL_SEL_BG : COL_BG;
-            unsigned char rowattr = ATTR(fg, bg);
-            unsigned char stateattr;
-            char namebuf[64];
-            char stbuf[20];
+            unsigned char attr = (i == selected)
+                                      ? ATTR(COL_SEL_FG, COL_ACCENT_BG)
+                                      : ATTR(COL_FG, COL_BG);
+            char namebuf[32];
 
-            stateattr = (i == selected) ? rowattr
-                        : ATTR(strcmp(entities[i].state, "on") == 0
-                                   ? COL_ON : COL_OFF, COL_BG);
-
-            sprintf(namebuf, " %-38s", entities[i].friendly_name);
-            vputs(LIST_TOP + row, LIST_LEFT, namebuf, rowattr);
-
-            sprintf(stbuf, "%-20s", entities[i].state);
-            vputs(LIST_TOP + row, LIST_LEFT + 39, stbuf, stateattr);
+            sprintf(namebuf, " %-*s", width - 1, entities[i].friendly_name);
+            namebuf[width] = '\0';
+            vputs(LIST_Y1 + 1 + row, LIST_X1 + 1, namebuf, attr);
         }
     }
 }
 
-/* EGA/CGA text mode has 16 fixed colors, not a continuous spectrum -- this
- * picks whichever of a handful of "colorful" palette entries is nearest to
- * the given hue, purely for an on-screen preview swatch. The precise hue
- * value is always shown as text alongside it and is what actually gets
- * sent to Home Assistant, so the real light gets accurate color even
- * though the swatch can only approximate it. */
-static int hue_to_color(int hue)
+/* Draws one bar-graph field: label above, bar body, value text below.
+ * Returns nothing; x/width define the column this field occupies. */
+static void draw_field(int x, int width, const char *label, int value,
+                        int min_val, int max_val, const char *value_fmt,
+                        unsigned char fill_attr, int focused)
 {
-    static const int anchors[6] = { 0, 60, 120, 180, 240, 300 };
-    static const int colors[6]  = { LIGHTRED, YELLOW, LIGHTGREEN, LIGHTCYAN,
-                                     LIGHTBLUE, LIGHTMAGENTA };
-    int best = 0, best_d = 361, i;
+    char buf[20];
+    unsigned char label_attr = focused ? ATTR(COL_SEL_FG, COL_ACCENT_BG)
+                                        : ATTR(COL_FG, COL_BG);
 
-    for (i = 0; i < 6; i++) {
-        int d = hue - anchors[i];
-        if (d < 0) d = -d;
-        if (d > 180) d = 360 - d;
-        if (d < best_d) {
-            best_d = d;
-            best = i;
-        }
-    }
-    return colors[best];
+    vfill(OPT_Y1 + 3, x, width, ' ', label_attr);
+    vputs(OPT_Y1 + 3, x, label, label_attr);
+
+    vbar(x, OPT_Y1 + 5, width, 10, value, min_val, max_val, fill_attr);
+
+    sprintf(buf, value_fmt, value);
+    vfill(OPT_Y1 + 16, x, width, ' ', label_attr);
+    vputs(OPT_Y1 + 16, x, buf, label_attr);
 }
 
 void scr_draw_options(const Entity *e, int focused)
 {
-    int y = OPT_TOP + 1;
-    int col = LIST_LEFT + 1;
-    char buf[24];
+    unsigned char power_attr;
+    int x;
 
-    vfill(y, LIST_LEFT, LIST_RIGHT - LIST_LEFT, ' ', ATTR(COL_BG, COL_BG));
+    vfill_rect(OPT_X1 + 1, OPT_Y1 + 1, OPT_X2 - 1, OPT_Y2 - 1, ATTR(COL_FG, COL_BG));
 
+    power_attr = (focused == OPT_POWER)
+                     ? ATTR(COL_SEL_FG, COL_ACCENT_BG)
+                     : ATTR(COL_FG, COL_BG);
     {
-        unsigned char a = (focused == OPT_POWER)
-                               ? ATTR(COL_SEL_FG, COL_SEL_BG) : ATTR(COL_FG, COL_BG);
+        char buf[16];
         sprintf(buf, "Power: %-3s", strcmp(e->state, "on") == 0 ? "ON" : "OFF");
-        vputs(y, col, buf, a);
-        col += (int) strlen(buf) + 3;
+        vputs(OPT_Y1 + 1, OPT_X1 + 2, buf, power_attr);
     }
 
-    if (e->hue >= 0) {
-        unsigned char a = (focused == OPT_COLOR)
-                               ? ATTR(COL_SEL_FG, COL_SEL_BG) : ATTR(COL_FG, COL_BG);
-
-        vputs(y, col, "Color: ", a);
-        col += 7;
-        vputc(y, col, 219 /* solid block, CP437 */, ATTR(hue_to_color(e->hue), COL_BG));
-        col += 1;
-        sprintf(buf, " %3d\xf8 ", e->hue); /* \xf8 = CP437 degree symbol */
-        vputs(y, col, buf, a);
-        col += (int) strlen(buf) + 2;
-    }
+    x = OPT_X1 + 2;
 
     if (e->brightness >= 0) {
-        unsigned char a = (focused == OPT_BRIGHTNESS)
-                               ? ATTR(COL_SEL_FG, COL_SEL_BG) : ATTR(COL_FG, COL_BG);
-        sprintf(buf, "Brightness: %3d%%", e->brightness);
-        vputs(y, col, buf, a);
+        draw_field(x, 10, "Brightness", e->brightness, 0, 100, "%d%%",
+                   ATTR(YELLOW, COL_BG), focused == OPT_BRIGHTNESS);
+        x += 12;
+    }
+
+    if (e->r >= 0) {
+        draw_field(x, 4, "R", e->r, 0, 255, "%d",
+                   ATTR(LIGHTRED, COL_BG), focused == OPT_R);
+        x += 6;
+        draw_field(x, 4, "G", e->g, 0, 255, "%d",
+                   ATTR(LIGHTGREEN, COL_BG), focused == OPT_G);
+        x += 6;
+        draw_field(x, 4, "B", e->b, 0, 255, "%d",
+                   ATTR(LIGHTBLUE, COL_BG), focused == OPT_B);
+        x += 6;
+    }
+
+    if (e->min_k >= 0) {
+        int mid = (e->min_k + e->max_k) / 2;
+        unsigned char temp_fill = ATTR(e->temp_k < mid ? YELLOW : LIGHTCYAN, COL_BG);
+        draw_field(x, 10, "Color Temp", e->temp_k, e->min_k, e->max_k, "%dK",
+                   temp_fill, focused == OPT_TEMP);
     }
 }
 
 void scr_status_msg(const char *msg)
 {
-    vfill(SCR_ROWS - 1, 1, 60, ' ', ATTR(BLACK, CYAN));
-    vputs(SCR_ROWS - 1, 1, msg, ATTR(BLACK, CYAN));
+    vfill(SCR_ROWS - 1, 1, 60, ' ', ATTR(COL_ACCENT_FG, COL_ACCENT_BG));
+    vputs(SCR_ROWS - 1, 1, msg, ATTR(COL_ACCENT_FG, COL_ACCENT_BG));
 }
 
 /* Word-wraps msg (honoring embedded '\n' as an explicit break) into the
@@ -304,7 +332,7 @@ void scr_alert(const char *title, const char *msg)
 
     box(x1, y1, x2, y2, title);
     for (r = y1 + 1; r < y2; r++)
-        vfill(r, x1 + 1, x2 - x1 - 1, ' ', ATTR(COL_BG, COL_BG));
+        vfill(r, x1 + 1, x2 - x1 - 1, ' ', ATTR(COL_FG, COL_BG));
 
     while (*p && row <= max_row) {
         int col = 0;
@@ -332,7 +360,7 @@ void scr_alert(const char *title, const char *msg)
             p++;
     }
 
-    vputs(y2 - 1, x1 + 2, "Press any key...", ATTR(WHITE, COL_BG));
+    vputs(y2 - 1, x1 + 2, "Press any key...", ATTR(COL_SEL_FG, COL_BG));
     getch();
 }
 
@@ -366,7 +394,7 @@ void scr_settings(int *com_port, int *baud_index)
         vputs(y1 + 5, x1 + 2, "            (Up/Down to change)",
               ATTR(LIGHTGRAY, COL_BG));
 
-        vputs(y2 - 1, x1 + 2, "Press ENTER to connect", ATTR(WHITE, COL_BG));
+        vputs(y2 - 1, x1 + 2, "Press ENTER to connect", ATTR(COL_SEL_FG, COL_BG));
 
         {
             int c = getch();
