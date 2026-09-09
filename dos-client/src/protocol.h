@@ -11,6 +11,8 @@ typedef struct {
     char entity_id[PROTO_ID_LEN];
     char friendly_name[PROTO_NAME_LEN];
     char state[PROTO_STATE_LEN];
+    int brightness; /* 0-100, or -1 if this entity doesn't support it */
+    int hue;         /* 0-359, or -1 if this entity doesn't support it */
 } Entity;
 
 /* Transport function pointers: >=0 bytes read/written on success, <0 on error. */
@@ -35,5 +37,13 @@ int proto_get(Transport *t, const char *entity_id, char *state);
    On error, err (if non-NULL) receives the ERR message text. */
 int proto_service(Transport *t, const char *cmd, const char *entity_id,
                    char *err, int err_len);
+
+/* hue: 0-359. Returns 0 on success, -1 on error (err filled as above). */
+int proto_set_color(Transport *t, const char *entity_id, int hue,
+                     char *err, int err_len);
+
+/* pct: 0-100. Returns 0 on success, -1 on error (err filled as above). */
+int proto_set_brightness(Transport *t, const char *entity_id, int pct,
+                          char *err, int err_len);
 
 #endif

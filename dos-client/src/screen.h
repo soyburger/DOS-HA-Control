@@ -16,6 +16,14 @@ void scr_draw_chrome(const char *title, const char *status_left,
  * Returns nothing; call scr_draw_chrome first. */
 void scr_draw_list(const Entity *entities, int count, int selected);
 
+/* Which option is Left/Right-focused in the options panel below the list. */
+typedef enum { OPT_POWER = 0, OPT_COLOR = 1, OPT_BRIGHTNESS = 2 } OptionKind;
+
+/* Draws Power (always) and Color/Brightness (only if entity `e` supports
+ * them, i.e. hue/brightness >= 0) with `focused` highlighted. Call after
+ * scr_draw_chrome and scr_draw_list. */
+void scr_draw_options(const Entity *e, int focused);
+
 /* Bottom-line transient message, e.g. "Connecting...", "ERR: ...". */
 void scr_status_msg(const char *msg);
 

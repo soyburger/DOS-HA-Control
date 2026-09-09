@@ -23,34 +23,45 @@ transport back later wouldn't touch the protocol logic.
 
 ## Commands (DOS -> bridge)
 
-| Command                | Description                                   |
-|-------------------------|------------------------------------------------|
-| `PING`                  | Liveness check.                                |
-| `LIST`                  | List configured entities.                      |
-| `GET <entity_id>`       | Get current state of one entity.               |
-| `ON <entity_id>`        | Call `turn_on`.                                |
-| `OFF <entity_id>`       | Call `turn_off`.                                |
-| `TOGGLE <entity_id>`    | Call `toggle`.                                  |
+| Command                       | Description                                   |
+|---------------------------------|------------------------------------------------|
+| `PING`                         | Liveness check.                                |
+| `LIST`                         | List configured entities.                      |
+| `GET <entity_id>`              | Get current state of one entity.               |
+| `ON <entity_id>`               | Call `turn_on`.                                |
+| `OFF <entity_id>`              | Call `turn_off`.                                |
+| `TOGGLE <entity_id>`           | Call `toggle`.                                  |
+| `SETCOLOR <entity_id> <hue>`   | Set hue (0-359, full saturation). Only valid for entities the `LIST` reply marked color-capable. |
+| `SETBRIGHT <entity_id> <pct>`  | Set brightness (0-100%). Only valid for entities the `LIST` reply marked brightness-capable. |
 
 ## Replies (bridge -> DOS)
 
-| Reply                                   | Meaning                              |
-|-------------------------------------------|----------------------------------------|
-| `PONG`                                    | Reply to `PING`.                       |
-| `ENTITY\|<id>\|<friendly_name>\|<state>`  | One row of a `LIST` reply.             |
-| `END`                                     | Terminates a `LIST` reply.             |
-| `STATE\|<id>\|<state>`                    | Reply to `GET`.                        |
-| `OK`                                      | Command succeeded (`ON`/`OFF`/`TOGGLE`).|
-| `ERR\|<message>`                          | Command failed; message is one line, no `\|`. |
+| Reply                                                                | Meaning                              |
+|------------------------------------------------------------------------|----------------------------------------|
+| `PONG`                                                                 | Reply to `PING`.                       |
+| `ENTITY\|<id>\|<name>\|<state>\|<brightness>\|<hue>`                   | One row of a `LIST` reply. `brightness` is 0-100 or `-1` if unsupported; `hue` is 0-359 or `-1` if unsupported. |
+| `END`                                                                  | Terminates a `LIST` reply.             |
+| `STATE\|<id>\|<state>`                                                 | Reply to `GET`.                        |
+| `OK`                                                                   | Command succeeded (`ON`/`OFF`/`TOGGLE`/`SETCOLOR`/`SETBRIGHT`). |
+| `ERR\|<message>`                                                       | Command failed; message is one line, no `\|`. |
+
+Whether an entity supports color/brightness is derived from Home
+Assistant's own `supported_color_modes` attribute on that entity, not
+configured by hand — a plain `switch.*` entity will always report `-1`
+for both.
 
 ## Example session
 
 ```
 > LIST
-< ENTITY|light.kitchen|Kitchen Light|on
-< ENTITY|light.hallway|Hallway Light|off
-< ENTITY|switch.fan|Office Fan|off
+< ENTITY|light.kitchen|Kitchen Light|on|80|45
+< ENTITY|light.hallway|Hallway Light|off|-1|-1
+< ENTITY|switch.fan|Office Fan|off|-1|-1
 < END
+> SETCOLOR light.kitchen 200
+< OK
+> SETBRIGHT light.kitchen 50
+< OK
 > TOGGLE light.hallway
 < OK
 > GET light.hallway

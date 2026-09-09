@@ -50,16 +50,24 @@ class HomeAssistantClient:
         )
 
     def get_state(self, entity_id: str) -> str:
+        return self.get_full_state(entity_id)["state"]
+
+    def get_full_state(self, entity_id: str) -> dict:
         resp = self.session.get(
             f"{self.base_url}/api/states/{entity_id}", timeout=self.timeout
         )
         resp.raise_for_status()
-        return resp.json()["state"]
+        return resp.json()
 
-    def call_service(self, domain: str, service: str, entity_id: str) -> None:
+    def call_service(
+        self, domain: str, service: str, entity_id: str, extra: dict | None = None
+    ) -> None:
+        payload = {"entity_id": entity_id}
+        if extra:
+            payload.update(extra)
         resp = self.session.post(
             f"{self.base_url}/api/services/{domain}/{service}",
-            json={"entity_id": entity_id},
+            json=payload,
             timeout=self.timeout,
         )
         resp.raise_for_status()
@@ -74,6 +82,32 @@ class HomeAssistantClient:
 
 def domain_of(entity_id: str) -> str:
     return entity_id.split(".", 1)[0]
+
+
+COLOR_MODES = {"hs", "rgb", "rgbw", "rgbww", "xy"}
+
+
+def brightness_and_hue(full_state: dict) -> tuple[int, int]:
+    """Returns (brightness_pct, hue_deg), each -1 if the entity doesn't
+    support it. Derived from HA's own supported_color_modes attribute --
+    not something we configure by hand, so a plain switch always gets
+    (-1, -1) and a color light reports whatever it actually supports."""
+    attrs = full_state.get("attributes", {})
+    modes = set(attrs.get("supported_color_modes") or [])
+
+    brightness_pct = -1
+    if modes & COLOR_MODES or "brightness" in modes:
+        raw = attrs.get("brightness")
+        if raw is not None:
+            brightness_pct = round(raw / 255 * 100)
+
+    hue = -1
+    if modes & COLOR_MODES:
+        hs = attrs.get("hs_color")
+        if hs is not None:
+            hue = round(hs[0]) % 360
+
+    return brightness_pct, hue
 
 
 class CommandHandler:
@@ -100,6 +134,10 @@ class CommandHandler:
                 return self._get(arg)
             if cmd in ("ON", "OFF", "TOGGLE"):
                 return self._service(cmd, arg)
+            if cmd == "SETCOLOR":
+                return self._setcolor(arg)
+            if cmd == "SETBRIGHT":
+                return self._setbright(arg)
             return [f"ERR|unknown command {cmd}"]
         except requests.HTTPError as exc:
             return [f"ERR|HA HTTP {exc.response.status_code}"]
@@ -110,10 +148,15 @@ class CommandHandler:
         out = []
         for ent in self.entities.values():
             try:
-                state = self.ha.get_state(ent.entity_id)
+                full = self.ha.get_full_state(ent.entity_id)
+                state = full["state"]
+                brightness_pct, hue = brightness_and_hue(full)
             except requests.RequestException:
-                state = "unknown"
-            out.append(f"ENTITY|{ent.entity_id}|{ent.friendly_name}|{state}")
+                state, brightness_pct, hue = "unknown", -1, -1
+            out.append(
+                f"ENTITY|{ent.entity_id}|{ent.friendly_name}|{state}"
+                f"|{brightness_pct}|{hue}"
+            )
         out.append("END")
         return out
 
@@ -129,6 +172,42 @@ class CommandHandler:
         domain = domain_of(entity_id)
         service = {"ON": "turn_on", "OFF": "turn_off", "TOGGLE": "toggle"}[cmd]
         self.ha.call_service(domain, service, entity_id)
+        return ["OK"]
+
+    def _setcolor(self, arg: str) -> list[str]:
+        parts = arg.split(None, 1)
+        if len(parts) != 2:
+            return ["ERR|usage: SETCOLOR <entity_id> <hue>"]
+        entity_id, hue_str = parts
+        if entity_id not in self.entities:
+            return [f"ERR|unknown entity {entity_id}"]
+        if domain_of(entity_id) != "light":
+            return [f"ERR|{entity_id} is not a light"]
+        try:
+            hue = int(hue_str) % 360
+        except ValueError:
+            return [f"ERR|bad hue {hue_str}"]
+        self.ha.call_service(
+            "light", "turn_on", entity_id, extra={"hs_color": [hue, 100]}
+        )
+        return ["OK"]
+
+    def _setbright(self, arg: str) -> list[str]:
+        parts = arg.split(None, 1)
+        if len(parts) != 2:
+            return ["ERR|usage: SETBRIGHT <entity_id> <pct>"]
+        entity_id, pct_str = parts
+        if entity_id not in self.entities:
+            return [f"ERR|unknown entity {entity_id}"]
+        if domain_of(entity_id) != "light":
+            return [f"ERR|{entity_id} is not a light"]
+        try:
+            pct = max(0, min(100, int(pct_str)))
+        except ValueError:
+            return [f"ERR|bad brightness {pct_str}"]
+        self.ha.call_service(
+            "light", "turn_on", entity_id, extra={"brightness_pct": pct}
+        )
         return ["OK"]
 
 

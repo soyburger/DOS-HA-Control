@@ -18,9 +18,12 @@
 #define SCR_COLS 80
 
 #define LIST_TOP    4
-#define LIST_BOTTOM (SCR_ROWS - 3)
+#define LIST_BOTTOM (SCR_ROWS - 8) /* leaves room for the options panel below */
 #define LIST_LEFT   2
 #define LIST_RIGHT  (SCR_COLS - 3)
+
+#define OPT_TOP    (LIST_BOTTOM + 3)
+#define OPT_BOTTOM (OPT_TOP + 3)
 
 /* CP437 box-drawing characters */
 #define CH_TL 201  /* double top-left corner */
@@ -170,6 +173,7 @@ void scr_draw_chrome(const char *title, const char *status_left,
 
     box(LIST_LEFT - 1, LIST_TOP - 1, LIST_RIGHT + 1, LIST_BOTTOM + 1,
         "Home Assistant Devices");
+    box(LIST_LEFT - 1, OPT_TOP, LIST_RIGHT + 1, OPT_BOTTOM, "Options");
 
     /* Status bar */
     vfill_row(SCR_ROWS - 1, ATTR(BLACK, CYAN));
@@ -212,6 +216,68 @@ void scr_draw_list(const Entity *entities, int count, int selected)
             sprintf(stbuf, "%-20s", entities[i].state);
             vputs(LIST_TOP + row, LIST_LEFT + 39, stbuf, stateattr);
         }
+    }
+}
+
+/* EGA/CGA text mode has 16 fixed colors, not a continuous spectrum -- this
+ * picks whichever of a handful of "colorful" palette entries is nearest to
+ * the given hue, purely for an on-screen preview swatch. The precise hue
+ * value is always shown as text alongside it and is what actually gets
+ * sent to Home Assistant, so the real light gets accurate color even
+ * though the swatch can only approximate it. */
+static int hue_to_color(int hue)
+{
+    static const int anchors[6] = { 0, 60, 120, 180, 240, 300 };
+    static const int colors[6]  = { LIGHTRED, YELLOW, LIGHTGREEN, LIGHTCYAN,
+                                     LIGHTBLUE, LIGHTMAGENTA };
+    int best = 0, best_d = 361, i;
+
+    for (i = 0; i < 6; i++) {
+        int d = hue - anchors[i];
+        if (d < 0) d = -d;
+        if (d > 180) d = 360 - d;
+        if (d < best_d) {
+            best_d = d;
+            best = i;
+        }
+    }
+    return colors[best];
+}
+
+void scr_draw_options(const Entity *e, int focused)
+{
+    int y = OPT_TOP + 1;
+    int col = LIST_LEFT + 1;
+    char buf[24];
+
+    vfill(y, LIST_LEFT, LIST_RIGHT - LIST_LEFT, ' ', ATTR(COL_BG, COL_BG));
+
+    {
+        unsigned char a = (focused == OPT_POWER)
+                               ? ATTR(COL_SEL_FG, COL_SEL_BG) : ATTR(COL_FG, COL_BG);
+        sprintf(buf, "Power: %-3s", strcmp(e->state, "on") == 0 ? "ON" : "OFF");
+        vputs(y, col, buf, a);
+        col += (int) strlen(buf) + 3;
+    }
+
+    if (e->hue >= 0) {
+        unsigned char a = (focused == OPT_COLOR)
+                               ? ATTR(COL_SEL_FG, COL_SEL_BG) : ATTR(COL_FG, COL_BG);
+
+        vputs(y, col, "Color: ", a);
+        col += 7;
+        vputc(y, col, 219 /* solid block, CP437 */, ATTR(hue_to_color(e->hue), COL_BG));
+        col += 1;
+        sprintf(buf, " %3d\xf8 ", e->hue); /* \xf8 = CP437 degree symbol */
+        vputs(y, col, buf, a);
+        col += (int) strlen(buf) + 2;
+    }
+
+    if (e->brightness >= 0) {
+        unsigned char a = (focused == OPT_BRIGHTNESS)
+                               ? ATTR(COL_SEL_FG, COL_SEL_BG) : ATTR(COL_FG, COL_BG);
+        sprintf(buf, "Brightness: %3d%%", e->brightness);
+        vputs(y, col, buf, a);
     }
 }
 
