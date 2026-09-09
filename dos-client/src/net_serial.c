@@ -1,7 +1,16 @@
-/* Serial transport via BIOS INT 14h. No packet driver, no mTCP -- this is
- * the simplest possible link: DOS <-> bridge over an RS-232 cable at a
- * fixed baud rate, 8N1. INT 14h caps out at 9600 baud on most BIOSes,
- * which is plenty for a line-oriented text protocol.
+/* Serial transport via direct 8250/16450/16550 UART register programming.
+ * No packet driver, no mTCP -- this is the simplest possible link: DOS <->
+ * bridge over an RS-232 cable at a fixed baud rate, 8N1.
+ *
+ * This deliberately bypasses BIOS INT 14h for the actual send/receive/init
+ * work (only the BIOS Data Area's port-presence table is still used, to
+ * find the I/O base address and confirm a port exists at all). INT 14h
+ * implementations vary in quality across BIOS vendors and were historically
+ * considered unreliable for real data transfer by serious DOS comms
+ * software (Telix, Procomm, Kermit), which is exactly why those programs
+ * all programmed the UART directly instead. The 8250-family register
+ * layout used below is a hardware standard, unchanged since the original
+ * IBM PC and identical across every BIOS vendor and DOS version.
  */
 #include <dos.h>
 #include <i86.h>
@@ -9,7 +18,23 @@
 #include <string.h>
 #include "net_serial.h"
 
-static int s_port = -1;
+/* 8250/16450/16550 register offsets from the UART's I/O base. */
+#define UART_THR 0 /* Transmitter Holding Register (write, DLAB=0) */
+#define UART_RBR 0 /* Receiver Buffer Register (read, DLAB=0) */
+#define UART_DLL 0 /* Divisor Latch LSB (DLAB=1) */
+#define UART_DLM 1 /* Divisor Latch MSB (DLAB=1) */
+#define UART_IER 1 /* Interrupt Enable Register (DLAB=0) */
+#define UART_LCR 3 /* Line Control Register */
+#define UART_MCR 4 /* Modem Control Register */
+#define UART_LSR 5 /* Line Status Register */
+
+#define LCR_8N1       0x03 /* 8 data bits, no parity, 1 stop bit */
+#define LCR_DLAB      0x80
+#define MCR_DTR_RTS   0x03
+#define LSR_DATA_READY 0x01
+#define LSR_THRE       0x20 /* transmitter holding register empty */
+
+static unsigned int s_io_base = 0;
 static int s_timeout_ticks = 90; /* ~5 sec at 18.2 ticks/sec */
 
 /* BIOS tick count at 0040:006C, incremented ~18.2 times/sec. */
@@ -21,56 +46,56 @@ static unsigned long bios_ticks(void)
     return ((unsigned long) r.x.cx << 16) | r.x.dx;
 }
 
+static unsigned int baud_divisor(int baud_code)
+{
+    /* Divisor = 115200 / desired baud. */
+    switch (baud_code) {
+        case SERIAL_BAUD_1200: return 96;
+        case SERIAL_BAUD_2400: return 48;
+        case SERIAL_BAUD_4800: return 24;
+        case SERIAL_BAUD_9600:
+        default:               return 12;
+    }
+}
+
 int serial_open(int port, int baud_code, int timeout_ticks)
 {
     /* The BIOS records each detected COM port's I/O base address in the
      * BIOS Data Area at 0040:0000 (COM1) through 0040:0006 (COM4), one
      * 16-bit word per port, 0x0000 meaning "not present at boot." This is
-     * the same table DOS's own MODE command and every other well-behaved
-     * program checks before trusting a COM port exists -- INT 14h itself
-     * has no reliable way to report an absent port, but this does. */
+     * the same table DOS's own MODE command checks before trusting a COM
+     * port exists -- we still use it just to find the address and confirm
+     * presence, nothing else from here on goes through the BIOS. */
     unsigned int _far *bda_com = (unsigned int _far *) _MK_FP(0x0040, 0x0000);
-    unsigned int io_base;
-    union REGS r;
+    unsigned int divisor;
 
     if (port < 0 || port > 3 || bda_com[port] == 0)
         return -1;
 
-    io_base = bda_com[port];
-
-    s_port = port;
+    s_io_base = bda_com[port];
     s_timeout_ticks = timeout_ticks;
+    divisor = baud_divisor(baud_code);
 
-    /* AH=00h Initialize port. AL: bits7-5 baud, 4-3 parity(00=none),
-     * bit2 stop bits(0=1), bits1-0 word length(11b=8 bits). */
-    r.h.ah = 0x00;
-    r.h.al = (unsigned char) ((baud_code << 5) | 0x03);
-    r.x.dx = port;
-    int86(0x14, &r, &r);
-
-    r.h.ah = 0x03;
-    r.x.dx = port;
-    int86(0x14, &r, &r);
-
-    /* BIOS's AH=00 initialize does NOT reliably assert DTR/RTS on every
-     * BIOS -- some real hardware and USB-serial adapters won't treat
-     * incoming data as valid (or the link as "connected" at all) until
-     * these modem-control lines are up. Set them directly on the UART's
-     * Modem Control Register (I/O base + 4): bit0=DTR, bit1=RTS. */
-    outp(io_base + 4, 0x03);
+    outp(s_io_base + UART_IER, 0x00);      /* disable UART interrupts -- we poll */
+    outp(s_io_base + UART_LCR, LCR_DLAB);  /* expose the divisor latch */
+    outp(s_io_base + UART_DLL, (unsigned char) (divisor & 0xFF));
+    outp(s_io_base + UART_DLM, (unsigned char) ((divisor >> 8) & 0xFF));
+    outp(s_io_base + UART_LCR, LCR_8N1);   /* DLAB=0, 8N1 */
+    outp(s_io_base + UART_MCR, MCR_DTR_RTS); /* DTR + RTS up */
 
     return 0;
 }
 
 static int serial_putc(char c)
 {
-    union REGS r;
-    r.h.ah = 0x01;
-    r.h.al = (unsigned char) c;
-    r.x.dx = s_port;
-    int86(0x14, &r, &r);
-    /* bit7 of AH set on write timeout/error */
-    return (r.h.ah & 0x80) ? -1 : 0;
+    unsigned long start = bios_ticks();
+
+    while (!(inp(s_io_base + UART_LSR) & LSR_THRE)) {
+        if (bios_ticks() - start > 18) /* ~1s hard cap so a wedged UART can't hang forever */
+            return -1;
+    }
+    outp(s_io_base + UART_THR, (unsigned char) c);
+    return 0;
 }
 
 static int serial_write_line(const char *line)
@@ -85,27 +110,13 @@ static int serial_write_line(const char *line)
     return 0;
 }
 
-/* Non-blocking-ish read of one char: returns the char (0-255), or -1 if
- * none is waiting right now (caller should poll/timeout around this). */
+/* Non-blocking read of one char: returns the char (0-255), or -1 if none
+ * is waiting right now (caller should poll/timeout around this). */
 static int serial_poll_char(void)
 {
-    union REGS r;
-
-    r.h.ah = 0x03; /* status */
-    r.x.dx = s_port;
-    int86(0x14, &r, &r);
-
-    if (!(r.h.ah & 0x01)) /* bit0 = data ready */
+    if (!(inp(s_io_base + UART_LSR) & LSR_DATA_READY))
         return -1;
-
-    r.h.ah = 0x02; /* receive char (returns immediately, data is ready) */
-    r.x.dx = s_port;
-    int86(0x14, &r, &r);
-
-    if (r.h.ah & 0x80) /* timeout/error bit */
-        return -1;
-
-    return r.h.al;
+    return inp(s_io_base + UART_RBR);
 }
 
 static int serial_read_line(char *buf, int buflen)

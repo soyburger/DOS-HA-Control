@@ -1,7 +1,8 @@
 /* SERTEST -- standalone serial transmit test, no protocol/bridge involved.
  * Sends the byte 'U' (0x55, alternating 01010101 bit pattern) out the
- * configured COM port once a second, forever, using the exact same
- * INT14h calls as net_serial.c. Press any key to quit.
+ * configured COM port once a second, forever, using the exact same direct
+ * UART register programming as net_serial.c (no BIOS INT 14h send/receive
+ * calls). Press any key to quit.
  *
  * Point of this file: isolate whether raw bytes can get out of DOS at
  * all on real hardware, independent of HACLIENT's higher-level protocol.
@@ -13,10 +14,17 @@
 #include <i86.h>
 #include <stdio.h>
 
+#define UART_THR 0
+#define UART_DLL 0
+#define UART_DLM 1
+#define UART_IER 1
+#define UART_LCR 3
+#define UART_MCR 4
+#define UART_LSR 5
+
 int main(int argc, char *argv[])
 {
     int port = 0; /* COM1 */
-    union REGS r;
     unsigned long count = 0;
     unsigned int _far *bda_com = (unsigned int _far *) _MK_FP(0x0040, 0x0000);
     unsigned int io_base;
@@ -26,26 +34,29 @@ int main(int argc, char *argv[])
 
     io_base = bda_com[port];
     printf("SERTEST: COM%d io_base=0x%04X\n", port + 1, io_base);
-    printf("SERTEST: sending 'U' every ~1s. Press any key to quit.\n");
+    if (io_base == 0) {
+        printf("BIOS reports no port present at COM%d -- aborting.\n", port + 1);
+        return 1;
+    }
+    printf("SERTEST: sending 'U' every ~1s via direct UART I/O. "
+           "Press any key to quit.\n");
 
-    r.h.ah = 0x00;
-    r.h.al = 0xE3; /* 9600 baud, no parity, 1 stop bit, 8 data bits */
-    r.x.dx = port;
-    int86(0x14, &r, &r);
-
-    /* Explicitly assert DTR/RTS -- BIOS init above doesn't reliably do
-     * this on every BIOS. See net_serial.c for the full explanation. */
-    if (io_base)
-        outp(io_base + 4, 0x03);
+    outp(io_base + UART_IER, 0x00);
+    outp(io_base + UART_LCR, 0x80);       /* DLAB=1 */
+    outp(io_base + UART_DLL, 12);         /* 115200/12 = 9600 baud */
+    outp(io_base + UART_DLM, 0);
+    outp(io_base + UART_LCR, 0x03);       /* DLAB=0, 8N1 */
+    outp(io_base + UART_MCR, 0x03);       /* DTR + RTS up */
 
     for (;;) {
-        r.h.ah = 0x01;
-        r.h.al = 'U';
-        r.x.dx = port;
-        int86(0x14, &r, &r);
+        unsigned char lsr;
+
+        while (!((lsr = (unsigned char) inp(io_base + UART_LSR)) & 0x20))
+            ; /* wait for transmitter holding register empty */
+        outp(io_base + UART_THR, 'U');
 
         count++;
-        printf("sent #%lu, last AH=0x%02X\r", count, r.h.ah);
+        printf("sent #%lu, LSR=0x%02X\r", count, lsr);
 
         if (kbhit()) {
             getch();
