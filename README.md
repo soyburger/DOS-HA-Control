@@ -1,8 +1,8 @@
 # DOS-HA-Control
 
 A DOS Shell-style text UI for controlling Home Assistant lights/switches
-from a real (or emulated) 486 running MS-DOS 6.22, over a plain serial
-cable.
+from real DOS hardware (tested and working on a 286; targets DOS 3.3
+through 7 generally) over a plain serial cable.
 
 ## Why a bridge
 
@@ -50,18 +50,25 @@ The wire protocol between DOS and the bridge is documented in
 
 ## Status
 
+**Working end-to-end on real hardware**: a 286 running `HACLIENT.EXE`
+over a genuine serial link controls real Home Assistant lights through
+the Pi bridge. That's the whole point of this project, confirmed for real.
+
 | Piece                         | Status                                    |
 |--------------------------------|--------------------------------------------|
-| Wire protocol                  | Designed, documented                        |
-| Bridge (`ha_bridge.py`)        | Working, tested against a mock HA server    |
-| DOS TUI (`screen.c`)           | Compiles clean; writes text-mode video memory directly + BIOS INT 10h (OpenWatcom's `conio.h` lacks Borland's textcolor/gotoxy/clrscr) |
-| Serial transport (`net_serial.c`) | Compiles clean; ran under DOSBox with no CPU exceptions, not yet tested against real hardware |
-| DOS client wiring (`main.c`, `config.c`) | Compiles clean, linked into a working `HACLIENT.EXE`, ran under DOSBox |
+| Wire protocol                  | Working, verified end-to-end on real hardware |
+| Bridge (`ha_bridge.py`)        | Working, verified end-to-end on real hardware |
+| DOS TUI (`screen.c`)           | Working, verified on real hardware; writes text-mode video memory directly + BIOS INT 10h (OpenWatcom's `conio.h` lacks Borland's textcolor/gotoxy/clrscr) |
+| Serial transport (`net_serial.c`) | Working, verified on real hardware; programs the 8250/16450/16550 UART registers directly (no BIOS `INT 14h` for send/receive) for reliability across BIOS vendors and DOS versions |
+| DOS client wiring (`main.c`, `config.c`) | Working, verified on real hardware; includes an interactive Port Settings screen at launch (COM port / baud), no `HACONFIG.INI` editing required for normal use |
 
-The build was compiled end-to-end with OpenWatcom (via a colima/Docker
-amd64-emulation loop, since no native macOS OpenWatcom build exists) and
-smoke-tested under DOSBox — see
-[dos-client/docs/BUILD.md](dos-client/docs/BUILD.md) for the exact steps
-and the three real bugs that loop caught. The TUI layout itself hasn't
-been eyeballed on screen yet (no screenshot access to the native DOSBox
-window in that environment).
+One specific 486 in testing turned out to have a dead serial port
+(confirmed via direct hardware register reads and independent testing on
+two completely different receiving machines) — not a code or protocol
+problem, just that one machine's hardware. Everything downstream of "does
+the port actually carry a signal" has been proven out on working hardware.
+
+See [dos-client/docs/BUILD.md](dos-client/docs/BUILD.md) for the OpenWatcom
+build process (via a colima/Docker amd64-emulation loop, since no native
+macOS OpenWatcom build exists) and [docs/PI_SETUP.md](docs/PI_SETUP.md)
+for setting up the Raspberry Pi bridge.
