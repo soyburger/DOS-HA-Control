@@ -1,5 +1,6 @@
-/* DOS Shell-look text UI: magenta/yellow chrome, cyan body, a device list
- * on the left and a bar-graph options panel on the right.
+/* DOS Shell-look text UI: magenta/yellow chrome, cyan canvas, a device
+ * list box sized to fit its content, and an options panel that pops up
+ * centered in front of it (with a drop shadow) when an entity is chosen.
  *
  * Writes directly to text-mode video memory at B800:0000 rather than using
  * Borland's textcolor()/gotoxy()/clrscr() -- OpenWatcom's conio.h doesn't
@@ -17,17 +18,8 @@
 #define SCR_ROWS 25
 #define SCR_COLS 80
 
-/* Left: device list. Right: options panel. Side by side, both boxes the
- * same top/bottom. */
-#define LIST_X1 1
-#define LIST_Y1 2
-#define LIST_X2 26
-#define LIST_Y2 22
-
-#define OPT_X1 (LIST_X2 + 2)
-#define OPT_Y1 2
-#define OPT_X2 (SCR_COLS - 2)
-#define OPT_Y2 22
+#define POPUP_W 54
+#define POPUP_H 18
 
 /* CP437 box-drawing characters */
 #define CH_TL 201  /* double top-left corner */
@@ -60,13 +52,15 @@
 
 /* Two rules, applied everywhere: text on magenta is always white, text on
  * cyan is always black. Yellow is reserved for small accents only (box
- * title captions) -- never body text. */
+ * title captions) -- never body text. Anything not inside a window is
+ * plain cyan canvas (except the title/status bars). */
+#define COL_CANVAS  CYAN
 #define COL_BG      MAGENTA  /* window fill, borders (white-on-magenta) */
 #define COL_FG      WHITE    /* body text on COL_BG */
 #define COL_TITLE   YELLOW   /* accent: box title captions only */
-#define COL_ACCENT_BG MAGENTA  /* title bar / status bar -- same fill as windows */
+#define COL_ACCENT_BG MAGENTA  /* title bar / status bar */
 #define COL_ACCENT_FG WHITE
-#define COL_HILITE_BG CYAN   /* selected list row / focused field */
+#define COL_HILITE_BG CYAN   /* selected list row / focused field / active state */
 #define COL_HILITE_FG BLACK  /* text on COL_HILITE_BG */
 
 static unsigned char _far *video = (unsigned char _far *) _MK_FP(0xB800, 0x0000);
@@ -103,6 +97,31 @@ static void vfill_rect(int x1, int y1, int x2, int y2, unsigned char attr)
     int y;
     for (y = y1; y <= y2; y++)
         vfill(y, x1, x2 - x1 + 1, ' ', attr);
+}
+
+/* Rewrites only the attribute byte of a cell, leaving its character alone
+ * -- used for the popup's drop shadow, which darkens whatever's already
+ * underneath rather than blanking it. */
+static void vshade(int row, int col, unsigned char attr)
+{
+    unsigned int off;
+    if (row < 0 || row >= SCR_ROWS || col < 0 || col >= SCR_COLS)
+        return;
+    off = ((unsigned int) row * SCR_COLS + col) * 2 + 1;
+    video[off] = attr;
+}
+
+/* Classic Turbo Vision-style drop shadow: a solid dark strip offset 1 row
+ * down and 2 columns right of the box's own footprint. */
+static void draw_shadow(int x1, int y1, int x2, int y2)
+{
+    int x, y;
+    for (y = y1 + 1; y <= y2 + 1; y++)
+        for (x = x2 + 1; x <= x2 + 2; x++)
+            vshade(y, x, ATTR(BLACK, BLACK));
+    for (y = y2 + 1; y <= y2 + 1; y++)
+        for (x = x1 + 2; x <= x2; x++)
+            vshade(y, x, ATTR(BLACK, BLACK));
 }
 
 /* Vertical bar graph: `height` rows tall starting at (x, y_top), `width`
@@ -181,7 +200,7 @@ void scr_init(void)
 
     set_cursor_visible(0);
     for (r = 0; r < SCR_ROWS; r++)
-        vfill_row(r, ATTR(COL_FG, COL_BG));
+        vfill_row(r, ATTR(COL_FG, COL_CANVAS));
 }
 
 void scr_shutdown(void)
@@ -205,10 +224,11 @@ void scr_set_hint(const char *status_left, const char *status_right)
     }
 }
 
-/* Draws everything that doesn't change between keypresses: background,
- * title bar, box borders. Call this once after connecting, not on every
- * redraw -- repainting all 25 rows every keystroke is what was causing
- * the visible flicker; scr_draw_list/scr_draw_options/scr_set_hint only
+/* Draws everything that doesn't change between keypresses: cyan canvas,
+ * title bar. Call this once after connecting and again whenever the
+ * options popup closes (to erase it and its shadow) -- not on every
+ * redraw, since repainting all 25 rows every keystroke is what caused
+ * the visible flicker. scr_draw_list/scr_draw_options/scr_set_hint only
  * ever touch the specific cells that actually changed. */
 void scr_draw_chrome(const char *title, const char *status_left,
                       const char *status_right)
@@ -217,44 +237,48 @@ void scr_draw_chrome(const char *title, const char *status_left,
     int pad;
 
     for (r = 0; r < SCR_ROWS; r++)
-        vfill_row(r, ATTR(COL_FG, COL_BG));
+        vfill_row(r, ATTR(COL_FG, COL_CANVAS));
 
-    /* Title bar */
     vfill_row(0, ATTR(COL_ACCENT_FG, COL_ACCENT_BG));
     pad = (SCR_COLS - (int) strlen(title)) / 2;
     if (pad < 0) pad = 0;
     vputs(0, pad, title, ATTR(COL_ACCENT_FG, COL_ACCENT_BG));
 
-    box(LIST_X1, LIST_Y1, LIST_X2, LIST_Y2, "Home Assistant Devices");
-    box(OPT_X1, OPT_Y1, OPT_X2, OPT_Y2, "Options");
-
     scr_set_hint(status_left, status_right);
 }
 
+/* Sized to fit its content: just wide enough for the longest entity name,
+ * just tall enough for the entity count, centered on the canvas. */
 void scr_draw_list(const Entity *entities, int count, int selected)
 {
-    int row, i;
-    int visible = LIST_Y2 - LIST_Y1 - 1;
-    int width = LIST_X2 - LIST_X1 - 1;
+    int maxlen = 4;
+    int i, x1, y1, x2, y2, w, h, width;
 
-    for (row = 0; row < visible; row++) {
-        i = row; /* no scrolling yet -- fine for a handful of entities */
+    for (i = 0; i < count; i++) {
+        int len = (int) strlen(entities[i].friendly_name);
+        if (len > maxlen) maxlen = len;
+    }
 
-        if (i >= count) {
-            vfill(LIST_Y1 + 1 + row, LIST_X1 + 1, width, ' ', ATTR(COL_FG, COL_BG));
-            continue;
-        }
+    w = maxlen + 4;                    /* 1-space padding each side + border */
+    h = (count > 0 ? count : 1) + 2;   /* content rows + border */
+    x1 = (SCR_COLS - w) / 2;
+    y1 = 1 + ((SCR_ROWS - 2 - h) / 2);
+    x2 = x1 + w - 1;
+    y2 = y1 + h - 1;
 
-        {
-            unsigned char attr = (i == selected)
-                                      ? ATTR(COL_HILITE_FG, COL_HILITE_BG)
-                                      : ATTR(COL_FG, COL_BG);
-            char namebuf[32];
+    vfill_rect(x1 + 1, y1 + 1, x2 - 1, y2 - 1, ATTR(COL_FG, COL_BG));
+    box(x1, y1, x2, y2, "Home Assistant Devices");
 
-            sprintf(namebuf, " %-*s", width - 1, entities[i].friendly_name);
-            namebuf[width] = '\0';
-            vputs(LIST_Y1 + 1 + row, LIST_X1 + 1, namebuf, attr);
-        }
+    width = x2 - x1 - 1;
+    for (i = 0; i < count; i++) {
+        unsigned char attr = (i == selected)
+                                  ? ATTR(COL_HILITE_FG, COL_HILITE_BG)
+                                  : ATTR(COL_FG, COL_BG);
+        char namebuf[40];
+
+        sprintf(namebuf, " %-*s", width - 1, entities[i].friendly_name);
+        namebuf[width] = '\0';
+        vputs(y1 + 1 + i, x1 + 1, namebuf, attr);
     }
 }
 
@@ -271,46 +295,63 @@ static void vputs_centered(int row, int x, int width, const char *s,
 
 /* Draws one bar-graph field: centered label, a single 1-wide centered
  * bar, centered value text below. x/width define the column this field
- * occupies (the bar itself is always 1 char wide, per design -- no mix
- * of wide and narrow bars). */
-static void draw_field(int x, int width, const char *label, int value,
-                        int min_val, int max_val, const char *value_fmt,
-                        unsigned char fill_attr, int focused)
+ * occupies (the bar itself is always 1 char wide -- no mix of wide and
+ * narrow bars). popup_y1 is the enclosing popup's top row. */
+static void draw_field(int x, int width, int popup_y1, const char *label,
+                        int value, int min_val, int max_val,
+                        const char *value_fmt, unsigned char fill_attr,
+                        int focused)
 {
     char buf[20];
     unsigned char label_attr = focused ? ATTR(COL_HILITE_FG, COL_HILITE_BG)
                                         : ATTR(COL_FG, COL_BG);
     int bar_x = x + width / 2;
 
-    vputs_centered(OPT_Y1 + 3, x, width, label, label_attr);
-    vbar(bar_x, OPT_Y1 + 5, 1, 10, value, min_val, max_val, fill_attr);
+    vputs_centered(popup_y1 + 2, x, width, label, label_attr);
+    vbar(bar_x, popup_y1 + 4, 1, 10, value, min_val, max_val, fill_attr);
     sprintf(buf, value_fmt, value);
-    vputs_centered(OPT_Y1 + 16, x, width, buf, label_attr);
+    vputs_centered(popup_y1 + 15, x, width, buf, label_attr);
 }
 
 /* Field order left to right: Power, Brightness, Color Temp, R/G/B --
  * matches the Left/Right cycle order in main.c so the highlighted field
- * always moves the direction the key implies. */
+ * always moves the direction the key implies. Pops up centered, on top
+ * of whatever's already drawn (the device list), with a drop shadow. */
 void scr_draw_options(const Entity *e, int focused)
 {
-    unsigned char power_attr;
+    int x1 = (SCR_COLS - POPUP_W) / 2;
+    int y1 = 1 + ((SCR_ROWS - 2 - POPUP_H) / 2);
+    int x2 = x1 + POPUP_W - 1;
+    int y2 = y1 + POPUP_H - 1;
     int x;
 
-    vfill_rect(OPT_X1 + 1, OPT_Y1 + 1, OPT_X2 - 1, OPT_Y2 - 1, ATTR(COL_FG, COL_BG));
+    draw_shadow(x1, y1, x2, y2);
+    vfill_rect(x1 + 1, y1 + 1, x2 - 1, y2 - 1, ATTR(COL_FG, COL_BG));
+    box(x1, y1, x2, y2, "Options");
 
-    x = OPT_X1 + 2;
+    x = x1 + 2;
 
-    /* Power is binary, not a range -- text only, no bar. */
-    power_attr = (focused == OPT_POWER)
-                     ? ATTR(COL_HILITE_FG, COL_HILITE_BG)
-                     : ATTR(COL_FG, COL_BG);
-    vputs_centered(OPT_Y1 + 3, x, 8, "Power", power_attr);
-    vputs_centered(OPT_Y1 + 10, x, 8,
-                    strcmp(e->state, "on") == 0 ? "ON" : "OFF", power_attr);
+    /* Power is binary, not a range -- two stacked lines instead of a bar,
+     * ON at the top of the bar zone and OFF at the bottom, so it's
+     * immediately visible which one is currently active. */
+    {
+        int is_on = strcmp(e->state, "on") == 0;
+        unsigned char label_attr = (focused == OPT_POWER)
+                                        ? ATTR(COL_HILITE_FG, COL_HILITE_BG)
+                                        : ATTR(COL_FG, COL_BG);
+        unsigned char on_attr  = is_on  ? ATTR(COL_HILITE_FG, COL_HILITE_BG)
+                                         : ATTR(COL_FG, COL_BG);
+        unsigned char off_attr = !is_on ? ATTR(COL_HILITE_FG, COL_HILITE_BG)
+                                         : ATTR(COL_FG, COL_BG);
+
+        vputs_centered(y1 + 2, x, 8, "Power", label_attr);
+        vputs_centered(y1 + 4, x, 8, "ON", on_attr);
+        vputs_centered(y1 + 13, x, 8, "OFF", off_attr);
+    }
     x += 10;
 
     if (e->brightness >= 0) {
-        draw_field(x, 10, "Brightness", e->brightness, 0, 100, "%d%%",
+        draw_field(x, 10, y1, "Brightness", e->brightness, 0, 100, "%d%%",
                    ATTR(WHITE, COL_BG), focused == OPT_BRIGHTNESS);
         x += 12;
     }
@@ -318,19 +359,19 @@ void scr_draw_options(const Entity *e, int focused)
     if (e->min_k >= 0) {
         int mid = (e->min_k + e->max_k) / 2;
         unsigned char temp_fill = ATTR(e->temp_k < mid ? YELLOW : LIGHTCYAN, COL_BG);
-        draw_field(x, 10, "Color Temp", e->temp_k, e->min_k, e->max_k, "%dK",
+        draw_field(x, 10, y1, "Color Temp", e->temp_k, e->min_k, e->max_k, "%dK",
                    temp_fill, focused == OPT_TEMP);
         x += 12;
     }
 
     if (e->r >= 0) {
-        draw_field(x, 4, "R", e->r, 0, 255, "%d",
+        draw_field(x, 4, y1, "R", e->r, 0, 255, "%d",
                    ATTR(LIGHTRED, COL_BG), focused == OPT_R);
         x += 5;
-        draw_field(x, 4, "G", e->g, 0, 255, "%d",
+        draw_field(x, 4, y1, "G", e->g, 0, 255, "%d",
                    ATTR(LIGHTGREEN, COL_BG), focused == OPT_G);
         x += 5;
-        draw_field(x, 4, "B", e->b, 0, 255, "%d",
+        draw_field(x, 4, y1, "B", e->b, 0, 255, "%d",
                    ATTR(LIGHTBLUE, COL_BG), focused == OPT_B);
     }
 }
@@ -356,6 +397,7 @@ void scr_alert(const char *title, const char *msg)
     const char *p = msg;
     int r;
 
+    draw_shadow(x1, y1, x2, y2);
     box(x1, y1, x2, y2, title);
     for (r = y1 + 1; r < y2; r++)
         vfill(r, x1 + 1, x2 - x1 - 1, ' ', ATTR(COL_FG, COL_BG));
@@ -406,6 +448,7 @@ void scr_settings(int *com_port, int *baud_index)
         char buf[40];
         int r;
 
+        draw_shadow(x1, y1, x2, y2);
         box(x1, y1, x2, y2, "Port Settings");
         for (r = y1 + 1; r < y2; r++)
             vfill(r, x1 + 1, x2 - x1 - 1, ' ', ATTR(COL_FG, COL_BG));

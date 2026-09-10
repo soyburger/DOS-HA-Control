@@ -126,13 +126,14 @@ static void redraw(void)
     if (mode == MODE_LIST) {
         scr_set_hint("Up/Down: Select  Enter: Options  R: Refresh  Esc: Quit",
                      "[SERIAL]");
-    } else {
+        scr_draw_list(entities, entity_count, selected);
+    } else if (entity_count > 0) {
+        /* The list is already visible underneath from before this mode
+         * was entered -- only the popup on top needs (re)drawing. */
         scr_set_hint("Left/Right: Field  Up/Down: Adjust  Enter: Set  Esc: Back",
                      "[SERIAL]");
-    }
-    scr_draw_list(entities, entity_count, selected);
-    if (entity_count > 0)
         scr_draw_options(&entities[selected], focused);
+    }
 }
 
 /* Up/Down adjust the focused field's value on screen only -- no command is
@@ -302,6 +303,10 @@ int main(void)
         } else if (c == KEY_ESC) {
             if (mode == MODE_OPTIONS) {
                 mode = MODE_LIST;
+                /* Erase the popup and its shadow -- a full chrome redraw
+                 * is fine here since this only happens on a deliberate,
+                 * infrequent transition, not on every keypress. */
+                scr_draw_chrome("Home Assistant Control", "", "[SERIAL]");
                 redraw();
             } else {
                 break;
