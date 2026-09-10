@@ -60,8 +60,10 @@
 #define COL_TITLE   YELLOW   /* accent: box title captions only */
 #define COL_ACCENT_BG MAGENTA  /* title bar / status bar */
 #define COL_ACCENT_FG WHITE
-#define COL_HILITE_BG CYAN   /* selected list row / focused field / active state */
+#define COL_HILITE_BG CYAN   /* selected list row / current ON-OFF state */
 #define COL_HILITE_FG BLACK  /* text on COL_HILITE_BG */
+#define COL_FOCUS_BG  YELLOW /* which field Left/Right is on -- distinct from COL_HILITE */
+#define COL_FOCUS_FG  BLACK  /* text on COL_FOCUS_BG */
 
 static unsigned char _far *video = (unsigned char _far *) _MK_FP(0xB800, 0x0000);
 
@@ -247,12 +249,15 @@ void scr_draw_chrome(const char *title, const char *status_left,
     scr_set_hint(status_left, status_right);
 }
 
-/* Sized to fit its content: just wide enough for the longest entity name,
- * just tall enough for the entity count, centered on the canvas. */
+#define LIST_TITLE "Home Assistant Devices"
+
+/* Sized to fit its content: at least wide enough for the box title (plus
+ * room for the border), or the longest entity name if that's wider; just
+ * tall enough for the entity count. Centered on the canvas. */
 void scr_draw_list(const Entity *entities, int count, int selected)
 {
     int maxlen = 4;
-    int i, x1, y1, x2, y2, w, h, width;
+    int i, x1, y1, x2, y2, w, h, width, title_w;
 
     for (i = 0; i < count; i++) {
         int len = (int) strlen(entities[i].friendly_name);
@@ -260,6 +265,8 @@ void scr_draw_list(const Entity *entities, int count, int selected)
     }
 
     w = maxlen + 4;                    /* 1-space padding each side + border */
+    title_w = (int) strlen(LIST_TITLE) + 6; /* " title " plus corners/margin */
+    if (title_w > w) w = title_w;
     h = (count > 0 ? count : 1) + 2;   /* content rows + border */
     x1 = (SCR_COLS - w) / 2;
     y1 = 1 + ((SCR_ROWS - 2 - h) / 2);
@@ -267,7 +274,7 @@ void scr_draw_list(const Entity *entities, int count, int selected)
     y2 = y1 + h - 1;
 
     vfill_rect(x1 + 1, y1 + 1, x2 - 1, y2 - 1, ATTR(COL_FG, COL_BG));
-    box(x1, y1, x2, y2, "Home Assistant Devices");
+    box(x1, y1, x2, y2, LIST_TITLE);
 
     width = x2 - x1 - 1;
     for (i = 0; i < count; i++) {
@@ -303,7 +310,7 @@ static void draw_field(int x, int width, int popup_y1, const char *label,
                         int focused)
 {
     char buf[20];
-    unsigned char label_attr = focused ? ATTR(COL_HILITE_FG, COL_HILITE_BG)
+    unsigned char label_attr = focused ? ATTR(COL_FOCUS_FG, COL_FOCUS_BG)
                                         : ATTR(COL_FG, COL_BG);
     int bar_x = x + width / 2;
 
@@ -337,7 +344,7 @@ void scr_draw_options(const Entity *e, int focused)
     {
         int is_on = strcmp(e->state, "on") == 0;
         unsigned char label_attr = (focused == OPT_POWER)
-                                        ? ATTR(COL_HILITE_FG, COL_HILITE_BG)
+                                        ? ATTR(COL_FOCUS_FG, COL_FOCUS_BG)
                                         : ATTR(COL_FG, COL_BG);
         unsigned char on_attr  = is_on  ? ATTR(COL_HILITE_FG, COL_HILITE_BG)
                                          : ATTR(COL_FG, COL_BG);
