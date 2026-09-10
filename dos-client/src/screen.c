@@ -196,11 +196,28 @@ static void box(int x1, int y1, int x2, int y2, const char *title)
     }
 }
 
+/* By default, BIOS text mode treats attribute bit 7 (the top bit of the
+ * background nibble) as "blink," not "bright background" -- so any
+ * background color 8-15 (e.g. YELLOW=14) gets that bit stripped to
+ * pick a blinking dark color instead (YELLOW's low 3 bits, 14 & 7, is
+ * BROWN) rather than showing steady bright yellow. INT 10h AX=1003h
+ * BL=0 repurposes that bit as intended: all 16 colors usable as a
+ * steady background, no blink. */
+static void set_blink_off(void)
+{
+    union REGS r;
+    r.h.ah = 0x10;
+    r.h.al = 0x03;
+    r.x.bx = 0x0000;
+    int86(0x10, &r, &r);
+}
+
 void scr_init(void)
 {
     int r;
 
     set_cursor_visible(0);
+    set_blink_off();
     for (r = 0; r < SCR_ROWS; r++)
         vfill_row(r, ATTR(COL_FG, COL_CANVAS));
 }
