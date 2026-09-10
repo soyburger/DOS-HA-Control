@@ -117,16 +117,18 @@ static int refresh_list(void)
     return 0;
 }
 
+/* Chrome (background/title bar/box borders) is drawn once in main() --
+ * repainting all 25 rows on every keypress is what caused the visible
+ * flicker. redraw() only ever touches the cells that actually changed:
+ * the status bar hint, the list, and the options panel. */
 static void redraw(void)
 {
     if (mode == MODE_LIST) {
-        scr_draw_chrome("Home Assistant Control",
-                        "Up/Down: Select  Enter: Options  R: Refresh  Esc: Quit",
-                        "[SERIAL]");
+        scr_set_hint("Up/Down: Select  Enter: Options  R: Refresh  Esc: Quit",
+                     "[SERIAL]");
     } else {
-        scr_draw_chrome("Home Assistant Control",
-                        "Left/Right: Field  Up/Down: Adjust  Enter: Set  Esc: Back",
-                        "[SERIAL]");
+        scr_set_hint("Left/Right: Field  Up/Down: Adjust  Enter: Set  Esc: Back",
+                     "[SERIAL]");
     }
     scr_draw_list(entities, entity_count, selected);
     if (entity_count > 0)
@@ -245,6 +247,7 @@ int main(void)
         return 1;
     }
 
+    scr_draw_chrome("Home Assistant Control", "", "[SERIAL]");
     redraw();
 
     for (;;) {

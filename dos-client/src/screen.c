@@ -58,14 +58,16 @@
 
 #define ATTR(fg, bg) (unsigned char) (((bg) << 4) | (fg))
 
-#define COL_BG      CYAN
-#define COL_FG      LIGHTMAGENTA  /* body text, borders */
-#define COL_TITLE   YELLOW        /* box border titles */
-#define COL_ACCENT_BG MAGENTA     /* title bar, status bar, selection */
-#define COL_ACCENT_FG YELLOW      /* title bar / status bar text */
-#define COL_SEL_FG  WHITE         /* selected list row / focused field text */
-#define COL_ON      LIGHTGREEN
-#define COL_OFF     LIGHTRED
+/* Two rules, applied everywhere: text on magenta is always white, text on
+ * cyan is always black. Yellow is reserved for small accents only (box
+ * title captions) -- never body text. */
+#define COL_BG      MAGENTA  /* window fill, borders (white-on-magenta) */
+#define COL_FG      WHITE    /* body text on COL_BG */
+#define COL_TITLE   YELLOW   /* accent: box title captions only */
+#define COL_ACCENT_BG MAGENTA  /* title bar / status bar -- same fill as windows */
+#define COL_ACCENT_FG WHITE
+#define COL_HILITE_BG CYAN   /* selected list row / focused field */
+#define COL_HILITE_FG BLACK  /* text on COL_HILITE_BG */
 
 static unsigned char _far *video = (unsigned char _far *) _MK_FP(0xB800, 0x0000);
 
@@ -191,6 +193,23 @@ void scr_shutdown(void)
     set_cursor_visible(1);
 }
 
+/* Rewrites just the status bar row -- cheap enough to call on every
+ * keypress without the flicker a full scr_draw_chrome() causes. */
+void scr_set_hint(const char *status_left, const char *status_right)
+{
+    vfill_row(SCR_ROWS - 1, ATTR(COL_ACCENT_FG, COL_ACCENT_BG));
+    vputs(SCR_ROWS - 1, 1, status_left, ATTR(COL_ACCENT_FG, COL_ACCENT_BG));
+    if (status_right) {
+        int x = SCR_COLS - (int) strlen(status_right) - 2;
+        vputs(SCR_ROWS - 1, x, status_right, ATTR(COL_ACCENT_FG, COL_ACCENT_BG));
+    }
+}
+
+/* Draws everything that doesn't change between keypresses: background,
+ * title bar, box borders. Call this once after connecting, not on every
+ * redraw -- repainting all 25 rows every keystroke is what was causing
+ * the visible flicker; scr_draw_list/scr_draw_options/scr_set_hint only
+ * ever touch the specific cells that actually changed. */
 void scr_draw_chrome(const char *title, const char *status_left,
                       const char *status_right)
 {
@@ -209,13 +228,7 @@ void scr_draw_chrome(const char *title, const char *status_left,
     box(LIST_X1, LIST_Y1, LIST_X2, LIST_Y2, "Home Assistant Devices");
     box(OPT_X1, OPT_Y1, OPT_X2, OPT_Y2, "Options");
 
-    /* Status bar */
-    vfill_row(SCR_ROWS - 1, ATTR(COL_ACCENT_FG, COL_ACCENT_BG));
-    vputs(SCR_ROWS - 1, 1, status_left, ATTR(COL_ACCENT_FG, COL_ACCENT_BG));
-    if (status_right) {
-        int x = SCR_COLS - (int) strlen(status_right) - 2;
-        vputs(SCR_ROWS - 1, x, status_right, ATTR(COL_ACCENT_FG, COL_ACCENT_BG));
-    }
+    scr_set_hint(status_left, status_right);
 }
 
 void scr_draw_list(const Entity *entities, int count, int selected)
@@ -234,7 +247,7 @@ void scr_draw_list(const Entity *entities, int count, int selected)
 
         {
             unsigned char attr = (i == selected)
-                                      ? ATTR(COL_SEL_FG, COL_ACCENT_BG)
+                                      ? ATTR(COL_HILITE_FG, COL_HILITE_BG)
                                       : ATTR(COL_FG, COL_BG);
             char namebuf[32];
 
@@ -245,26 +258,39 @@ void scr_draw_list(const Entity *entities, int count, int selected)
     }
 }
 
-/* Draws one bar-graph field: label above, bar body, value text below.
- * Returns nothing; x/width define the column this field occupies. */
+/* Centers `s` within a `width`-wide field starting at column x. */
+static void vputs_centered(int row, int x, int width, const char *s,
+                            unsigned char attr)
+{
+    int len = (int) strlen(s);
+    int pad = (width - len) / 2;
+    if (pad < 0) pad = 0;
+    vfill(row, x, width, ' ', attr);
+    vputs(row, x + pad, s, attr);
+}
+
+/* Draws one bar-graph field: centered label, a single 1-wide centered
+ * bar, centered value text below. x/width define the column this field
+ * occupies (the bar itself is always 1 char wide, per design -- no mix
+ * of wide and narrow bars). */
 static void draw_field(int x, int width, const char *label, int value,
                         int min_val, int max_val, const char *value_fmt,
                         unsigned char fill_attr, int focused)
 {
     char buf[20];
-    unsigned char label_attr = focused ? ATTR(COL_SEL_FG, COL_ACCENT_BG)
+    unsigned char label_attr = focused ? ATTR(COL_HILITE_FG, COL_HILITE_BG)
                                         : ATTR(COL_FG, COL_BG);
+    int bar_x = x + width / 2;
 
-    vfill(OPT_Y1 + 3, x, width, ' ', label_attr);
-    vputs(OPT_Y1 + 3, x, label, label_attr);
-
-    vbar(x, OPT_Y1 + 5, width, 10, value, min_val, max_val, fill_attr);
-
+    vputs_centered(OPT_Y1 + 3, x, width, label, label_attr);
+    vbar(bar_x, OPT_Y1 + 5, 1, 10, value, min_val, max_val, fill_attr);
     sprintf(buf, value_fmt, value);
-    vfill(OPT_Y1 + 16, x, width, ' ', label_attr);
-    vputs(OPT_Y1 + 16, x, buf, label_attr);
+    vputs_centered(OPT_Y1 + 16, x, width, buf, label_attr);
 }
 
+/* Field order left to right: Power, Brightness, Color Temp, R/G/B --
+ * matches the Left/Right cycle order in main.c so the highlighted field
+ * always moves the direction the key implies. */
 void scr_draw_options(const Entity *e, int focused)
 {
     unsigned char power_attr;
@@ -272,33 +298,21 @@ void scr_draw_options(const Entity *e, int focused)
 
     vfill_rect(OPT_X1 + 1, OPT_Y1 + 1, OPT_X2 - 1, OPT_Y2 - 1, ATTR(COL_FG, COL_BG));
 
-    power_attr = (focused == OPT_POWER)
-                     ? ATTR(COL_SEL_FG, COL_ACCENT_BG)
-                     : ATTR(COL_FG, COL_BG);
-    {
-        char buf[16];
-        sprintf(buf, "Power: %-3s", strcmp(e->state, "on") == 0 ? "ON" : "OFF");
-        vputs(OPT_Y1 + 1, OPT_X1 + 2, buf, power_attr);
-    }
-
     x = OPT_X1 + 2;
+
+    /* Power is binary, not a range -- text only, no bar. */
+    power_attr = (focused == OPT_POWER)
+                     ? ATTR(COL_HILITE_FG, COL_HILITE_BG)
+                     : ATTR(COL_FG, COL_BG);
+    vputs_centered(OPT_Y1 + 3, x, 8, "Power", power_attr);
+    vputs_centered(OPT_Y1 + 10, x, 8,
+                    strcmp(e->state, "on") == 0 ? "ON" : "OFF", power_attr);
+    x += 10;
 
     if (e->brightness >= 0) {
         draw_field(x, 10, "Brightness", e->brightness, 0, 100, "%d%%",
-                   ATTR(YELLOW, COL_BG), focused == OPT_BRIGHTNESS);
+                   ATTR(WHITE, COL_BG), focused == OPT_BRIGHTNESS);
         x += 12;
-    }
-
-    if (e->r >= 0) {
-        draw_field(x, 4, "R", e->r, 0, 255, "%d",
-                   ATTR(LIGHTRED, COL_BG), focused == OPT_R);
-        x += 6;
-        draw_field(x, 4, "G", e->g, 0, 255, "%d",
-                   ATTR(LIGHTGREEN, COL_BG), focused == OPT_G);
-        x += 6;
-        draw_field(x, 4, "B", e->b, 0, 255, "%d",
-                   ATTR(LIGHTBLUE, COL_BG), focused == OPT_B);
-        x += 6;
     }
 
     if (e->min_k >= 0) {
@@ -306,6 +320,18 @@ void scr_draw_options(const Entity *e, int focused)
         unsigned char temp_fill = ATTR(e->temp_k < mid ? YELLOW : LIGHTCYAN, COL_BG);
         draw_field(x, 10, "Color Temp", e->temp_k, e->min_k, e->max_k, "%dK",
                    temp_fill, focused == OPT_TEMP);
+        x += 12;
+    }
+
+    if (e->r >= 0) {
+        draw_field(x, 4, "R", e->r, 0, 255, "%d",
+                   ATTR(LIGHTRED, COL_BG), focused == OPT_R);
+        x += 5;
+        draw_field(x, 4, "G", e->g, 0, 255, "%d",
+                   ATTR(LIGHTGREEN, COL_BG), focused == OPT_G);
+        x += 5;
+        draw_field(x, 4, "B", e->b, 0, 255, "%d",
+                   ATTR(LIGHTBLUE, COL_BG), focused == OPT_B);
     }
 }
 
@@ -360,7 +386,7 @@ void scr_alert(const char *title, const char *msg)
             p++;
     }
 
-    vputs(y2 - 1, x1 + 2, "Press any key...", ATTR(COL_SEL_FG, COL_BG));
+    vputs(y2 - 1, x1 + 2, "Press any key...", ATTR(COL_FG, COL_BG));
     getch();
 }
 
@@ -387,14 +413,14 @@ void scr_settings(int *com_port, int *baud_index)
         sprintf(buf, "COM Port:   COM%d", *com_port + 1);
         vputs(y1 + 1, x1 + 2, buf, ATTR(COL_FG, COL_BG));
         vputs(y1 + 2, x1 + 2, "            (Left/Right to change)",
-              ATTR(LIGHTGRAY, COL_BG));
+              ATTR(COL_FG, COL_BG));
 
         sprintf(buf, "Baud Rate:  %s", BAUD_LABELS[*baud_index]);
         vputs(y1 + 4, x1 + 2, buf, ATTR(COL_FG, COL_BG));
         vputs(y1 + 5, x1 + 2, "            (Up/Down to change)",
-              ATTR(LIGHTGRAY, COL_BG));
+              ATTR(COL_FG, COL_BG));
 
-        vputs(y2 - 1, x1 + 2, "Press ENTER to connect", ATTR(COL_SEL_FG, COL_BG));
+        vputs(y2 - 1, x1 + 2, "Press ENTER to connect", ATTR(COL_FG, COL_BG));
 
         {
             int c = getch();
